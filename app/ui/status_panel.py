@@ -52,6 +52,7 @@ class StatusRow(QFrame):
             action_label = QLabel(check_result["action"])
             action_label.setObjectName("statusAction")
             action_label.setWordWrap(True)
+            action_label.setOpenExternalLinks(True)
             text_layout.addWidget(action_label)
 
         layout.addLayout(text_layout, 1)

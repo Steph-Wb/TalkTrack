@@ -261,7 +261,7 @@ class DependencyChecker:
                 "passed": False,
                 "level": "warn",
                 "message": "FFmpeg not found on PATH.",
-                "action": "Install FFmpeg for audio format conversion support.",
+                "action": 'Install FFmpeg for audio format conversion support: <a href="https://github.com/BtbN/FFmpeg-Builds">Download FFmpeg</a>',
             }
 
     def check_windows_version(self):
