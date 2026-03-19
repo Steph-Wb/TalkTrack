@@ -84,6 +84,10 @@ class MainWindow(QMainWindow):
         diarization_setup_action.triggered.connect(self._show_diarization_setup)
         help_menu.addAction(diarization_setup_action)
 
+        shortcut_action = QAction("Add to Start &Menu...", self)
+        shortcut_action.triggered.connect(self._install_start_menu_shortcut)
+        help_menu.addAction(shortcut_action)
+
         help_menu.addSeparator()
 
         log_action = QAction("Open &Log File", self)
@@ -228,12 +232,13 @@ class MainWindow(QMainWindow):
 
     def _start_recording(self):
         mic = self.source_selector.get_selected_mic()
+        mic2 = self.source_selector.get_selected_mic2()
         capture_mode = self.source_selector.get_capture_mode()
         app_pids = self.source_selector.get_selected_app_pids()
         loopback = self.source_selector.get_selected_loopback()
 
         # Validate: need at least one audio source
-        if mic is None and loopback is None and not app_pids:
+        if mic is None and mic2 is None and loopback is None and not app_pids:
             QMessageBox.warning(
                 self, "No Audio Source",
                 "Please select at least one audio source "
@@ -258,6 +263,7 @@ class MainWindow(QMainWindow):
             loopback_device=loopback,
             capture_mode=capture_mode,
             app_pids=app_pids,
+            mic_device_2=mic2,
         )
         self.notes_panel.set_recording_start(datetime.now())
         self.chat_panel.clear_chat()
@@ -670,6 +676,8 @@ class MainWindow(QMainWindow):
             self.recordings_list.refresh()
             # Refresh devices in case hidden devices changed
             self.source_selector.refresh_devices()
+            # Update mic2 visibility in case mic_count changed
+            self.source_selector.update_mic_count(self.config.get("audio", "mic_count"))
 
     def _open_recordings_folder(self):
         import os
@@ -707,6 +715,43 @@ class MainWindow(QMainWindow):
     def _report_bug(self):
         from main import build_bug_report_url
         webbrowser.open(build_bug_report_url())
+
+    def _install_start_menu_shortcut(self):
+        """Create a Start Menu shortcut for proper taskbar icon."""
+        try:
+            from app.utils.start_menu import needs_shortcut, create_shortcut, shortcut_path
+            app_dir = Path(__file__).parent.parent
+
+            if not needs_shortcut(app_dir):
+                QMessageBox.information(
+                    self, "Start Menu Shortcut",
+                    f"Shortcut already exists:\n{shortcut_path()}"
+                )
+                return
+
+            reply = QMessageBox.question(
+                self,
+                "Add to Start Menu",
+                "This will create a TalkTrack shortcut in your Start Menu.\n\n"
+                f"Location:\n{shortcut_path()}\n\n"
+                "This also helps Windows show the correct taskbar icon.\n\n"
+                "Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            create_shortcut(app_dir)
+            QMessageBox.information(
+                self, "Start Menu Shortcut",
+                "Shortcut created! TalkTrack is now in the Start Menu.\n\n"
+                "The taskbar icon should update next time you launch the app."
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Start Menu Shortcut",
+                f"Could not create shortcut:\n{e}"
+            )
 
     def _show_about(self):
         dialog = AboutDialog(self)

@@ -200,7 +200,6 @@ def main():
             WM_SETICON = 0x0080
             IMAGE_ICON = 1
             LR_LOADFROMFILE = 0x0010
-            LR_DEFAULTSIZE = 0x0040
             hwnd = int(window.winId())
             hicon_big = ctypes.windll.user32.LoadImageW(
                 None, str(icon_path), IMAGE_ICON, 48, 48,
@@ -216,6 +215,29 @@ def main():
                 ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 0, hicon_small)
         except Exception:
             pass
+
+    # Set AppUserModelID on the window itself (not just the process).
+    # MS Store Python's AppX manifest can override the process-level ID,
+    # but per-window IDs via SHGetPropertyStoreForWindow take precedence.
+    try:
+        from comtypes import GUID
+        hwnd = int(window.winId())
+        IID_IPropertyStore = GUID("{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}")
+
+        SHGetPropertyStoreForWindow = ctypes.windll.shell32.SHGetPropertyStoreForWindow
+        SHGetPropertyStoreForWindow.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)
+        ]
+        SHGetPropertyStoreForWindow.restype = ctypes.HRESULT
+
+        ppv = ctypes.c_void_p()
+        hr = SHGetPropertyStoreForWindow(hwnd, ctypes.byref(IID_IPropertyStore), ctypes.byref(ppv))
+        if hr == 0 and ppv.value:
+            from app.utils.start_menu import _property_store_set_string
+            _property_store_set_string(ppv.value, "TalkTrack.TalkTrack.1")
+            logger.info("Set per-window AppUserModelID")
+    except Exception as e:
+        logger.debug("Could not set per-window AppUserModelID: %s", e)
 
     logger.info("TalkTrack UI ready")
     sys.exit(app.exec())

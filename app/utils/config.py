@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
         "capture_mode": "legacy",
         "selected_apps": [],
         "hidden_devices": [],
+        "mic_count": 1,
     },
     "output": {
         "directory": str(Path(__file__).parent.parent.parent / "recordings"),

@@ -105,6 +105,22 @@ class SourceSelector(QWidget):
         mic_row.addWidget(self.mic_combo, 1)
         content.addLayout(mic_row)
 
+        # Second microphone selector (hidden by default)
+        self._mic2_row_widget = QWidget()
+        mic2_row = QHBoxLayout(self._mic2_row_widget)
+        mic2_row.setContentsMargins(0, 0, 0, 0)
+        mic2_label = QLabel("Microphone 2:")
+        mic2_label.setFixedWidth(80)
+        mic2_row.addWidget(mic2_label)
+
+        self.mic2_combo = QComboBox()
+        self.mic2_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        mic2_row.addWidget(self.mic2_combo, 1)
+        content.addWidget(self._mic2_row_widget)
+
+        mic_count = self._config.get("audio", "mic_count") if self._config else 1
+        self._mic2_row_widget.setVisible(mic_count >= 2)
+
         # System audio section
         if self._win11:
             self._setup_per_app_ui(content)
@@ -283,6 +299,13 @@ class SourceSelector(QWidget):
         if default_mic_idx > 0:
             self.mic_combo.setCurrentIndex(default_mic_idx)
 
+        # Second microphone (same device list)
+        self.mic2_combo.clear()
+        self.mic2_combo.addItem("(None - don't record second mic)", None)
+        for i, dev in enumerate(self._mic_devices):
+            label = f"{dev['name']} ({dev['hostapi']})"
+            self.mic2_combo.addItem(label, dev["index"])
+
         # System audio dropdown - always populated
         self.loopback_combo.clear()
         self._loopback_devices = get_system_audio_devices(hidden_devices=hidden)
@@ -310,6 +333,16 @@ class SourceSelector(QWidget):
 
     def get_selected_mic(self):
         return self.mic_combo.currentData()
+
+    def get_selected_mic2(self):
+        """Return second mic device index, or None if not enabled/selected."""
+        if not self._mic2_row_widget.isVisible():
+            return None
+        return self.mic2_combo.currentData()
+
+    def update_mic_count(self, count):
+        """Show or hide the second microphone dropdown."""
+        self._mic2_row_widget.setVisible(count >= 2)
 
     def get_selected_loopback(self):
         """Return loopback device index for system audio capture."""
@@ -382,6 +415,7 @@ class SourceSelector(QWidget):
 
     def set_enabled(self, enabled):
         self.mic_combo.setEnabled(enabled)
+        self.mic2_combo.setEnabled(enabled)
         self.loopback_combo.setEnabled(enabled)
         self.refresh_btn.setEnabled(enabled)
         if self.app_list is not None:

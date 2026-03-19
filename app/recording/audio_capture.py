@@ -228,11 +228,13 @@ class DualAudioCapture:
     """Captures both microphone and system audio simultaneously."""
 
     def __init__(self, mic_device=None, loopback_device=None, sample_rate=16000,
-                 capture_mode="legacy", app_pids=None):
+                 capture_mode="legacy", app_pids=None, mic_device_2=None):
         self.sample_rate = sample_rate
         self.mic_device = mic_device
+        self.mic_device_2 = mic_device_2
         self.loopback_device = loopback_device
         self.mic_stream = None
+        self.mic_stream_2 = None
         self.loopback_stream = None
         self._recording = False
         self._start_time = None
@@ -271,6 +273,17 @@ class DualAudioCapture:
         else:
             logger.warning("No mic device selected")
 
+        # Second microphone capture (optional)
+        if self.mic_device_2 is not None:
+            self.mic_stream_2 = AudioStream(
+                device_index=self.mic_device_2,
+                sample_rate=self.sample_rate,
+                channels=1,
+                level_callback=self._mic_level_callback,
+            )
+            self.mic_stream_2.start()
+            logger.info("Mic stream 2 started on device %s", self.mic_device_2)
+
         # System audio capture (PyAudioWPatch WASAPI loopback)
         if self.loopback_device is not None:
             try:
@@ -297,6 +310,8 @@ class DualAudioCapture:
     def pause(self):
         if self.mic_stream:
             self.mic_stream.pause()
+        if self.mic_stream_2:
+            self.mic_stream_2.pause()
         if self.loopback_stream:
             self.loopback_stream.pause()
         if self._start_time:
@@ -306,6 +321,8 @@ class DualAudioCapture:
     def resume(self):
         if self.mic_stream:
             self.mic_stream.resume()
+        if self.mic_stream_2:
+            self.mic_stream_2.resume()
         if self.loopback_stream:
             self.loopback_stream.resume()
         self._start_time = time.time()
@@ -321,8 +338,15 @@ class DualAudioCapture:
 
         if self.mic_stream:
             self.mic_stream.stop()
+        if self.mic_stream_2:
+            self.mic_stream_2.stop()
+
+        # Mix mic streams and save
+        mic_data = self._get_mixed_mic_data()
+        if mic_data.size > 0:
             mic_path = self.output_dir / "mic_audio.wav"
-            results["mic"] = self.mic_stream.save_to_file(mic_path)
+            sf.write(str(mic_path), mic_data, self.sample_rate)
+            results["mic"] = str(mic_path)
 
         if self.loopback_stream:
             self.loopback_stream.stop()
@@ -338,9 +362,43 @@ class DualAudioCapture:
 
         return results
 
+    def _get_mixed_mic_data(self):
+        """Get audio from all mic streams, mixed together."""
+        mic1 = self.mic_stream.get_audio_data() if self.mic_stream else np.array([], dtype=np.float32)
+        mic2 = self.mic_stream_2.get_audio_data() if self.mic_stream_2 else np.array([], dtype=np.float32)
+
+        if mic1.size == 0 and mic2.size == 0:
+            return np.array([], dtype=np.float32)
+        if mic2.size == 0:
+            if mic1.ndim > 1:
+                return mic1.mean(axis=1).astype(np.float32)
+            return mic1
+        if mic1.size == 0:
+            if mic2.ndim > 1:
+                return mic2.mean(axis=1).astype(np.float32)
+            return mic2
+
+        # Both mics have data — ensure mono then mix
+        if mic1.ndim > 1:
+            mic1 = mic1.mean(axis=1).astype(np.float32)
+        if mic2.ndim > 1:
+            mic2 = mic2.mean(axis=1).astype(np.float32)
+
+        max_len = max(len(mic1), len(mic2))
+        if len(mic1) < max_len:
+            mic1 = np.pad(mic1, (0, max_len - len(mic1)))
+        if len(mic2) < max_len:
+            mic2 = np.pad(mic2, (0, max_len - len(mic2)))
+
+        mixed = mic1 + mic2
+        peak = np.abs(mixed).max()
+        if peak > 1.0:
+            mixed = mixed / peak * 0.95
+        return mixed
+
     def _create_combined_audio(self):
         """Mix mic and system audio into a single track."""
-        mic_data = self.mic_stream.get_audio_data() if self.mic_stream else np.array([])
+        mic_data = self._get_mixed_mic_data()
         sys_data = self.loopback_stream.get_audio_data() if self.loopback_stream else np.array([])
 
         if mic_data.size == 0 and sys_data.size == 0:

@@ -71,6 +71,16 @@ class SettingsDialog(QDialog):
         self.channels_combo.addItem("Stereo", 2)
         audio_form.addRow("Channels:", self.channels_combo)
 
+        self.mic_count_combo = QComboBox()
+        self.mic_count_combo.addItem("1 microphone", 1)
+        self.mic_count_combo.addItem("2 microphones", 2)
+        self.mic_count_combo.setToolTip(
+            "Use 2 microphones to capture from both your main mic\n"
+            "and headset mic simultaneously. Both are mixed into\n"
+            "a single microphone track."
+        )
+        audio_form.addRow("Microphone inputs:", self.mic_count_combo)
+
         audio_layout.addWidget(audio_group)
 
         # Hidden devices group
@@ -318,6 +328,11 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self.channels_combo.setCurrentIndex(idx)
 
+        mic_count = self.config.get("audio", "mic_count")
+        idx = self.mic_count_combo.findData(mic_count)
+        if idx >= 0:
+            self.mic_count_combo.setCurrentIndex(idx)
+
         # Hidden devices
         hidden = self.config.get("audio", "hidden_devices") or []
         for pattern in hidden:
@@ -388,6 +403,7 @@ class SettingsDialog(QDialog):
 
         self.config.set("audio", "sample_rate", self.sample_rate_combo.currentData())
         self.config.set("audio", "channels", self.channels_combo.currentData())
+        self.config.set("audio", "mic_count", self.mic_count_combo.currentData())
 
         hidden = []
         for i in range(self.hidden_devices_list.count()):

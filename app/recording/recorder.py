@@ -47,7 +47,8 @@ class Recorder(QObject):
         self.state_changed.emit(state)
 
     def start_recording(self, mic_device=None, loopback_device=None,
-                        capture_mode="legacy", app_pids=None):
+                        capture_mode="legacy", app_pids=None,
+                        mic_device_2=None):
         """Start a new recording session."""
         if self._state != RecordingState.IDLE:
             return
@@ -62,6 +63,7 @@ class Recorder(QObject):
             "directory": str(session_dir),
             "started_at": datetime.now().isoformat(),
             "mic_device": mic_device,
+            "mic_device_2": mic_device_2,
             "loopback_device": loopback_device,
             "capture_mode": capture_mode,
             "app_pids": app_pids or [],
@@ -75,6 +77,7 @@ class Recorder(QObject):
             sample_rate=sample_rate,
             capture_mode=capture_mode,
             app_pids=app_pids,
+            mic_device_2=mic_device_2,
         )
         self._capture.set_level_callbacks(
             mic_callback=lambda chunk: self.mic_level.emit(chunk),
@@ -149,6 +152,7 @@ class Recorder(QObject):
 
     def _convert_to_mp3(self, audio_files):
         """Convert WAV files to MP3 using FFmpeg."""
+        mp3_files = {}
         for key, wav_path in audio_files.items():
             if wav_path and wav_path.endswith(".wav"):
                 mp3_path = wav_path.replace(".wav", ".mp3")
@@ -158,9 +162,10 @@ class Recorder(QObject):
                          "-qscale:a", "2", mp3_path],
                         capture_output=True, check=True,
                     )
-                    audio_files[key + "_mp3"] = mp3_path
+                    mp3_files[key + "_mp3"] = mp3_path
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass  # FFmpeg not available or conversion failed
+        audio_files.update(mp3_files)
 
     def _start_timer(self):
         self._timer_running = True
