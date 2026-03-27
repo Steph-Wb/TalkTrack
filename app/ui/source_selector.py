@@ -211,6 +211,11 @@ class SourceSelector(QWidget):
         if self._auto_refresh_timer:
             self._auto_refresh_timer.stop()
 
+    def set_recording_active(self, active):
+        """Switch to faster polling (1s) during recording for quicker call-end detection."""
+        if self._auto_refresh_timer and self._auto_refresh_timer.isActive():
+            self._auto_refresh_timer.start(1000 if active else 3000)
+
     def _refresh_app_list(self):
         """Update the app list with currently active audio apps."""
         if self.app_list is None:

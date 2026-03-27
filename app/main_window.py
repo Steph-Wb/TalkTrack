@@ -311,6 +311,7 @@ class MainWindow(QMainWindow):
         self.source_selector.set_enabled(state == RecordingState.IDLE)
 
         if state == RecordingState.RECORDING:
+            self.source_selector.set_recording_active(True)
             if not self.waveform.isVisible():
                 self.waveform.start()
             else:
@@ -318,6 +319,7 @@ class MainWindow(QMainWindow):
         elif state == RecordingState.PAUSED:
             self.waveform._paint_timer.stop()
         elif state == RecordingState.IDLE:
+            self.source_selector.set_recording_active(False)
             self.waveform.stop()
             self.recording_controls.reset_timer()
             self.recording_controls.reset_levels()
