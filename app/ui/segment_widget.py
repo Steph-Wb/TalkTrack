@@ -171,7 +171,7 @@ class SegmentWidget(QWidget):
         self.play_btn.setIcon(_get_play_icon())
         self._apply_play_style()
         self.play_btn.clicked.connect(self._on_play_clicked)
-        layout.addWidget(self.play_btn)
+        layout.addWidget(self.play_btn, 0, Qt.AlignmentFlag.AlignTop)
 
         # Timestamp
         start_ts = _format_time(self._segment.start)
@@ -233,18 +233,20 @@ class SegmentWidget(QWidget):
 
     def _apply_play_style(self):
         self.play_btn.setStyleSheet(
-            "QPushButton { border-radius: 13px; "
+            "QPushButton#segmentPlayBtn { border-radius: 13px; "
             "background-color: #1e6650; "
-            "border: 1px solid #2d9b75; padding: 0; }"
-            "QPushButton:hover { background-color: #2d9b75; }"
+            "border: 1px solid #2d9b75; padding: 0; "
+            "min-height: 0; min-width: 0; max-height: 26px; max-width: 26px; }"
+            "QPushButton#segmentPlayBtn:hover { background-color: #2d9b75; }"
         )
 
     def _apply_stop_style(self):
         self.play_btn.setStyleSheet(
-            "QPushButton { border-radius: 13px; "
+            "QPushButton#segmentPlayBtn { border-radius: 13px; "
             "background-color: #7d2a2a; "
-            "border: 1px solid #b34d4d; padding: 0; }"
-            "QPushButton:hover { background-color: #b34d4d; }"
+            "border: 1px solid #b34d4d; padding: 0; "
+            "min-height: 0; min-width: 0; max-height: 26px; max-width: 26px; }"
+            "QPushButton#segmentPlayBtn:hover { background-color: #b34d4d; }"
         )
 
     def set_playing(self, playing):
