@@ -3,7 +3,7 @@
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QLabel,
-    QApplication,
+    QApplication, QLineEdit,
 )
 
 
@@ -31,6 +31,18 @@ class SummaryPanel(QWidget):
         self._text.setVisible(False)
         layout.addWidget(self._text)
 
+        # Instruction input for regeneration
+        self._instruction_input = QLineEdit()
+        self._instruction_input.setPlaceholderText(
+            "Optional: instructions for regeneration (e.g. \"use John instead of SPEAKER_00\")"
+        )
+        self._instruction_input.setStyleSheet(
+            "QLineEdit { background-color: #1e1e2e; color: #cdd6f4; "
+            "border: 1px solid #313244; border-radius: 4px; padding: 4px 8px; }"
+        )
+        self._instruction_input.setVisible(False)
+        layout.addWidget(self._instruction_input)
+
         btn_row = QHBoxLayout()
         self._copy_btn = QPushButton("Copy")
         self._copy_btn.clicked.connect(self._copy)
@@ -51,6 +63,7 @@ class SummaryPanel(QWidget):
         self._copy_btn.setVisible(True)
         self._gen_btn.setText("Regenerate")
         self._gen_btn.setVisible(True)
+        self._instruction_input.setVisible(True)
         self._status.setVisible(False)
 
     def clear(self):
@@ -59,6 +72,8 @@ class SummaryPanel(QWidget):
         self._text.setVisible(False)
         self._copy_btn.setVisible(False)
         self._gen_btn.setVisible(False)
+        self._instruction_input.clear()
+        self._instruction_input.setVisible(False)
         self._status.setText("No summary generated yet.")
         self._status.setVisible(True)
 
@@ -72,10 +87,15 @@ class SummaryPanel(QWidget):
         self._status.setText("Generating summary...")
         self._status.setVisible(True)
         self._gen_btn.setVisible(False)
+        self._instruction_input.setVisible(False)
         self._text.setVisible(False)
 
     def get_text(self):
         return self._text.toPlainText()
+
+    def get_instruction(self):
+        """Return the user's regeneration instruction, if any."""
+        return self._instruction_input.text().strip()
 
     def _copy(self):
         QApplication.clipboard().setText(self._text.toPlainText())

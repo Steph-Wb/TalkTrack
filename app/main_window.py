@@ -823,20 +823,25 @@ class MainWindow(QMainWindow):
             actions_ready = pyqtSignal(list)
             error = pyqtSignal(str)
 
-            def __init__(self, provider, segments, speaker_names, notes=""):
+            def __init__(self, provider, segments, speaker_names, notes="", instruction=""):
                 super().__init__()
                 self._provider = provider
                 self._segments = segments
                 self._names = speaker_names
                 self._notes = notes
+                self._instruction = instruction
 
             def run(self):
                 try:
-                    summary_prompt = build_summary_prompt(self._segments, self._names, self._notes)
+                    summary_prompt = build_summary_prompt(
+                        self._segments, self._names, self._notes, self._instruction
+                    )
                     summary = self._provider.complete(summary_prompt)
                     self.summary_ready.emit(summary)
 
-                    actions_prompt = build_action_items_prompt(self._segments, self._names, self._notes)
+                    actions_prompt = build_action_items_prompt(
+                        self._segments, self._names, self._notes, self._instruction
+                    )
                     actions_response = self._provider.complete(actions_prompt)
                     actions = parse_action_items(actions_response)
                     self.actions_ready.emit(actions)
@@ -845,7 +850,10 @@ class MainWindow(QMainWindow):
 
         speaker_names = self.transcript_viewer._speaker_names
         notes = self.notes_panel.get_text()
-        self._summarize_worker = SummarizeWorker(provider, self._transcript.segments, speaker_names, notes)
+        instruction = self.summary_panel.get_instruction()
+        self._summarize_worker = SummarizeWorker(
+            provider, self._transcript.segments, speaker_names, notes, instruction
+        )
         self._summarize_worker.summary_ready.connect(self._on_summary_ready)
         self._summarize_worker.actions_ready.connect(self._on_actions_ready)
         self._summarize_worker.error.connect(lambda e: self.status_label.setText(f"AI error: {e}"))

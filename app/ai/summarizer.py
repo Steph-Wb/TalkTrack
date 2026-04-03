@@ -19,32 +19,44 @@ def _format_notes(notes):
     return f"\n\nUSER NOTES (taken during the meeting):\n{notes.strip()}"
 
 
-def build_summary_prompt(segments, speaker_names, notes=""):
+def _format_instruction(instruction):
+    if not instruction or not instruction.strip():
+        return ""
+    return f"\n\nADDITIONAL INSTRUCTIONS FROM USER:\n{instruction.strip()}"
+
+
+def build_summary_prompt(segments, speaker_names, notes="", instruction=""):
     transcript_text = _format_transcript(segments, speaker_names)
     notes_text = _format_notes(notes)
+    instruction_text = _format_instruction(instruction)
     return (
         "Below is a transcript of a meeting. Please provide a concise summary "
         "covering: key discussion points, decisions made, and outcomes.\n\n"
         "If user notes are included, incorporate any relevant context from them "
         "into the summary.\n\n"
+        "If additional instructions are provided, follow them when generating "
+        "the summary.\n\n"
         "Format as markdown with bullet points.\n\n"
-        f"TRANSCRIPT:\n{transcript_text}{notes_text}"
+        f"TRANSCRIPT:\n{transcript_text}{notes_text}{instruction_text}"
     )
 
 
-def build_action_items_prompt(segments, speaker_names, notes=""):
+def build_action_items_prompt(segments, speaker_names, notes="", instruction=""):
     transcript_text = _format_transcript(segments, speaker_names)
     notes_text = _format_notes(notes)
+    instruction_text = _format_instruction(instruction)
     return (
         "Below is a transcript of a meeting. Extract all action items — tasks, "
         "follow-ups, or commitments made by participants.\n\n"
         "If user notes are included, also extract any action items from them.\n\n"
+        "If additional instructions are provided, follow them when extracting "
+        "action items.\n\n"
         "Return a JSON array where each item has:\n"
         '- "task": description of the action item\n'
         '- "assignee": who is responsible (speaker name)\n'
         '- "deadline": mentioned deadline or empty string\n\n'
         "Return ONLY the JSON array, no other text.\n\n"
-        f"TRANSCRIPT:\n{transcript_text}{notes_text}"
+        f"TRANSCRIPT:\n{transcript_text}{notes_text}{instruction_text}"
     )
 
 
