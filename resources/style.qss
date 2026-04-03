@@ -481,18 +481,7 @@ QToolTip {
     min-height: 16px;
 }
 
-/* Segment Widget */
-#segmentPlayBtn {
-    font-size: 11px;
-    border-radius: 14px;
-    background-color: #313244;
-    border: 1px solid #45475a;
-    padding: 0;
-}
-
-#segmentPlayBtn:hover {
-    background-color: #45475a;
-}
+/* Segment Widget — play button styles are set inline via set_playing() */
 
 /* Speaker Name Panel */
 #speakerPanelToggle {

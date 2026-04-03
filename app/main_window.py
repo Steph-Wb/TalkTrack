@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
         self._transcription_worker = None
         self._diarization_worker = None
 
-        self.setWindowTitle("TalkTrack - Call Recorder & Transcriber")
+        self.setWindowTitle("TalkTrack - Call Recorder, Transcriber & AI Summary")
         self.setMinimumSize(1000, 700)
         self.resize(1260, 800)
 
@@ -158,7 +158,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
 
         # Transcript tab
-        self.transcript_viewer = TranscriptViewer()
+        self.transcript_viewer = TranscriptViewer(config=self.config)
         self.tabs.addTab(self.transcript_viewer, "Transcript")
 
         # Notes tab

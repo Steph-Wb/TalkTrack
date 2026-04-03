@@ -97,7 +97,7 @@ class SourceSelector(QWidget):
         # Microphone selector
         mic_row = QHBoxLayout()
         mic_label = QLabel("Microphone:")
-        mic_label.setFixedWidth(80)
+        mic_label.setFixedWidth(95)
         mic_row.addWidget(mic_label)
 
         self.mic_combo = QComboBox()
@@ -110,7 +110,7 @@ class SourceSelector(QWidget):
         mic2_row = QHBoxLayout(self._mic2_row_widget)
         mic2_row.setContentsMargins(0, 0, 0, 0)
         mic2_label = QLabel("Microphone 2:")
-        mic2_label.setFixedWidth(80)
+        mic2_label.setFixedWidth(95)
         mic2_row.addWidget(mic2_label)
 
         self.mic2_combo = QComboBox()
@@ -150,7 +150,7 @@ class SourceSelector(QWidget):
         """Original system audio dropdown (Win10 or fallback)."""
         sys_row = QHBoxLayout()
         sys_label = QLabel("System Audio:")
-        sys_label.setFixedWidth(80)
+        sys_label.setFixedWidth(95)
         sys_row.addWidget(sys_label)
 
         self.loopback_combo = QComboBox()

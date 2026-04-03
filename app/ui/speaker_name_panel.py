@@ -35,12 +35,13 @@ class SpeakerNamePanel(QWidget):
 
     names_changed = pyqtSignal(dict)  # {speaker_id: name}
 
-    def __init__(self, parent=None):
+    def __init__(self, config=None, parent=None):
         super().__init__(parent)
+        self._config = config
         self._speaker_ids = []
         self._name_edits = {}  # speaker_id -> QLineEdit
         self._speaker_names = {}  # speaker_id -> name str
-        self._collapsed = False
+        self._collapsed = config.get("ui", "speakers_collapsed") if config else False
         self._setup_ui()
         self.hide()  # hidden until speakers exist
 
@@ -85,7 +86,9 @@ class SpeakerNamePanel(QWidget):
             return
 
         self.show()
-        self._toggle_btn.setText(f"\u25bc Speakers ({len(self._speaker_ids)} detected)")
+        arrow = "\u25b6" if self._collapsed else "\u25bc"
+        self._toggle_btn.setText(f"{arrow} Speakers ({len(self._speaker_ids)} detected)")
+        self._rows_container.setVisible(not self._collapsed)
 
         # Clear existing rows
         self._name_edits.clear()
@@ -159,3 +162,5 @@ class SpeakerNamePanel(QWidget):
         arrow = "\u25b6" if self._collapsed else "\u25bc"
         count = len(self._speaker_ids)
         self._toggle_btn.setText(f"{arrow} Speakers ({count} detected)")
+        if self._config:
+            self._config.set("ui", "speakers_collapsed", self._collapsed)

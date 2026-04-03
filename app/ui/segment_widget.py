@@ -2,8 +2,60 @@
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMenu
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPointF
+from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QPolygonF
+
+
+def _make_play_icon(size=20, color="#a6e3a1"):
+    """Draw a filled triangle (play) icon."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor(color))
+    painter.setPen(Qt.PenStyle.NoPen)
+    m = size * 0.25  # margin
+    triangle = QPolygonF([
+        QPointF(m, m * 0.6),
+        QPointF(size - m * 0.6, size / 2),
+        QPointF(m, size - m * 0.6),
+    ])
+    painter.drawPolygon(triangle)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _make_stop_icon(size=20, color="#f38ba8"):
+    """Draw a filled square (stop) icon."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor(color))
+    painter.setPen(Qt.PenStyle.NoPen)
+    m = size * 0.3
+    painter.drawRoundedRect(int(m), int(m), int(size - 2 * m), int(size - 2 * m), 2, 2)
+    painter.end()
+    return QIcon(pixmap)
+
+
+# Cache icons so they're built once
+_play_icon = None
+_stop_icon = None
+
+
+def _get_play_icon():
+    global _play_icon
+    if _play_icon is None:
+        _play_icon = _make_play_icon()
+    return _play_icon
+
+
+def _get_stop_icon():
+    global _stop_icon
+    if _stop_icon is None:
+        _stop_icon = _make_stop_icon()
+    return _stop_icon
 
 
 # Speaker colors — must match transcript_viewer.py and speaker_name_panel.py
@@ -112,14 +164,12 @@ class SegmentWidget(QWidget):
         layout.setSpacing(6)
 
         # Play button
-        self.play_btn = QPushButton("\u25b6")
+        self.play_btn = QPushButton()
         self.play_btn.setObjectName("segmentPlayBtn")
-        self.play_btn.setFixedSize(28, 28)
-        self.play_btn.setStyleSheet(
-            "QPushButton { font-size: 11px; border-radius: 14px; "
-            "background-color: #313244; border: 1px solid #45475a; padding: 0; }"
-            "QPushButton:hover { background-color: #45475a; }"
-        )
+        self.play_btn.setFixedSize(26, 26)
+        self.play_btn.setIconSize(QSize(16, 16))
+        self.play_btn.setIcon(_get_play_icon())
+        self._apply_play_style()
         self.play_btn.clicked.connect(self._on_play_clicked)
         layout.addWidget(self.play_btn)
 
@@ -181,10 +231,31 @@ class SegmentWidget(QWidget):
             self.speaker_label.setText("")
             self.speaker_label.setFixedWidth(0)
 
+    def _apply_play_style(self):
+        self.play_btn.setStyleSheet(
+            "QPushButton { border-radius: 13px; "
+            "background-color: #1e6650; "
+            "border: 1px solid #2d9b75; padding: 0; }"
+            "QPushButton:hover { background-color: #2d9b75; }"
+        )
+
+    def _apply_stop_style(self):
+        self.play_btn.setStyleSheet(
+            "QPushButton { border-radius: 13px; "
+            "background-color: #7d2a2a; "
+            "border: 1px solid #b34d4d; padding: 0; }"
+            "QPushButton:hover { background-color: #b34d4d; }"
+        )
+
     def set_playing(self, playing):
         """Update play button state."""
         self._playing = playing
-        self.play_btn.setText("\u23f9" if playing else "\u25b6")
+        if playing:
+            self.play_btn.setIcon(_get_stop_icon())
+            self._apply_stop_style()
+        else:
+            self.play_btn.setIcon(_get_play_icon())
+            self._apply_play_style()
 
     def _on_play_clicked(self):
         if self._playing:

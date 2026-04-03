@@ -124,7 +124,7 @@ $sc.TargetPath = '{target_exe}'
 $sc.Arguments = '{arguments}'
 $sc.WorkingDirectory = '{app_dir}'
 $sc.IconLocation = '{icon_path},0'
-$sc.Description = 'TalkTrack - Call Recorder and Transcriber'
+$sc.Description = 'TalkTrack - Call Recorder, Transcriber and AI Summary'
 $sc.Save()
 """
 

@@ -48,6 +48,7 @@ DEFAULT_CONFIG = {
     },
     "ui": {
         "theme": "dark",
+        "speakers_collapsed": False,
     },
 }
 

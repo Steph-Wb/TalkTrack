@@ -41,8 +41,9 @@ class TranscriptViewer(QWidget):
     transcript_changed = pyqtSignal()       # emitted when text or names change
     speaker_names_changed = pyqtSignal(dict)  # emitted when speaker names change
 
-    def __init__(self, parent=None):
+    def __init__(self, config=None, parent=None):
         super().__init__(parent)
+        self._config = config
         self._transcript = None
         self._speaker_colors = {}
         self._speaker_names = {}
@@ -94,7 +95,7 @@ class TranscriptViewer(QWidget):
 
         # Speaker name panel
         from app.ui.speaker_name_panel import SpeakerNamePanel
-        self.speaker_panel = SpeakerNamePanel()
+        self.speaker_panel = SpeakerNamePanel(config=self._config)
         self.speaker_panel.names_changed.connect(self._on_speaker_names_changed)
         layout.addWidget(self.speaker_panel)
 

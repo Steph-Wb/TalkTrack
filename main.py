@@ -68,8 +68,6 @@ except ImportError:
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QIcon
 
-from app.main_window import MainWindow
-
 
 def get_log_file():
     """Return the path to the log file."""
@@ -189,10 +187,34 @@ def main():
     if stylesheet:
         app.setStyleSheet(stylesheet)
 
+    # Show splash screen while heavy modules load
+    from PyQt6.QtWidgets import QSplashScreen
+    from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
+    from PyQt6.QtCore import Qt
+
+    splash_pixmap = QPixmap(340, 120)
+    splash_pixmap.fill(QColor("#1e1e2e"))
+    painter = QPainter(splash_pixmap)
+    painter.setPen(QColor("#89b4fa"))
+    painter.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+    painter.drawText(splash_pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "TalkTrack")
+    painter.setPen(QColor("#a6adc8"))
+    painter.setFont(QFont("Segoe UI", 10))
+    r = splash_pixmap.rect()
+    r.setTop(r.center().y() + 10)
+    painter.drawText(r, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "Loading...")
+    painter.end()
+
+    splash = QSplashScreen(splash_pixmap)
+    splash.show()
+    app.processEvents()
+
+    from app.main_window import MainWindow
     window = MainWindow()
     if icon_path.exists():
         window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
+    splash.finish(window)
 
     # Force taskbar icon via Win32 API (needed for Microsoft Store Python)
     if icon_path.exists():
