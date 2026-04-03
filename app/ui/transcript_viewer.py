@@ -146,7 +146,8 @@ class TranscriptViewer(QWidget):
         self.play_all_btn.clicked.connect(self._on_play_all_clicked)
         export_row.addWidget(self.play_all_btn)
 
-        self.continue_from_cb = QCheckBox("Continue from here")
+        self.continue_from_cb = QCheckBox("Continue playing")
+        self.continue_from_cb.setChecked(True)
         self.continue_from_cb.setToolTip(
             "When checked, clicking a segment's play button\n"
             "will continue playing all segments from that point."
