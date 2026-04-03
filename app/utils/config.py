@@ -9,6 +9,8 @@ DEFAULT_CONFIG = {
         "channels": 1,
         "mic_device": None,
         "loopback_device": None,
+        "last_mic": "",
+        "last_mic2": "",
         "capture_mode": "legacy",
         "selected_apps": [],
         "hidden_devices": [],

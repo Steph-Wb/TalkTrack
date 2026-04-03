@@ -301,7 +301,21 @@ class SourceSelector(QWidget):
             if dev["index"] == default_mic:
                 default_mic_idx = i + 1
 
-        if default_mic_idx > 0:
+        # Restore saved mic or fall back to system default
+        last_mic = ""
+        if self._config:
+            try:
+                last_mic = self._config.get("audio", "last_mic") or ""
+            except (KeyError, TypeError):
+                pass
+
+        if last_mic:
+            idx = self.mic_combo.findText(last_mic)
+            if idx >= 0:
+                self.mic_combo.setCurrentIndex(idx)
+            elif default_mic_idx > 0:
+                self.mic_combo.setCurrentIndex(default_mic_idx)
+        elif default_mic_idx > 0:
             self.mic_combo.setCurrentIndex(default_mic_idx)
 
         # Second microphone (same device list)
@@ -310,6 +324,18 @@ class SourceSelector(QWidget):
         for i, dev in enumerate(self._mic_devices):
             label = f"{dev['name']} ({dev['hostapi']})"
             self.mic2_combo.addItem(label, dev["index"])
+
+        # Restore saved mic 2
+        last_mic2 = ""
+        if self._config:
+            try:
+                last_mic2 = self._config.get("audio", "last_mic2") or ""
+            except (KeyError, TypeError):
+                pass
+        if last_mic2:
+            idx = self.mic2_combo.findText(last_mic2)
+            if idx >= 0:
+                self.mic2_combo.setCurrentIndex(idx)
 
         # System audio dropdown - always populated
         self.loopback_combo.clear()
@@ -404,7 +430,7 @@ class SourceSelector(QWidget):
                 self.radio_per_app.setChecked(True)
 
     def save_capture_settings(self):
-        """Save current capture mode and selected app names to config."""
+        """Save current capture mode, selected app names, and mic choices to config."""
         if not self._config:
             return
         self._config.set("audio", "capture_mode", self.get_capture_mode())
@@ -417,6 +443,12 @@ class SourceSelector(QWidget):
                 if item.checkState() == Qt.CheckState.Checked:
                     selected_names.append(item.text().split("  (")[0])
         self._config.set("audio", "selected_apps", selected_names)
+
+        # Save mic selections by name (device indices change across sessions)
+        mic1_text = self.mic_combo.currentText() if self.mic_combo.currentData() is not None else ""
+        self._config.set("audio", "last_mic", mic1_text)
+        mic2_text = self.mic2_combo.currentText() if self.mic2_combo.currentData() is not None else ""
+        self._config.set("audio", "last_mic2", mic2_text)
 
     def set_enabled(self, enabled):
         self.mic_combo.setEnabled(enabled)
