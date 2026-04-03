@@ -102,6 +102,7 @@ class SourceSelector(QWidget):
 
         self.mic_combo = QComboBox()
         self.mic_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.mic_combo.currentIndexChanged.connect(self._save_mic_selection)
         mic_row.addWidget(self.mic_combo, 1)
         content.addLayout(mic_row)
 
@@ -115,6 +116,7 @@ class SourceSelector(QWidget):
 
         self.mic2_combo = QComboBox()
         self.mic2_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.mic2_combo.currentIndexChanged.connect(self._save_mic_selection)
         mic2_row.addWidget(self.mic2_combo, 1)
         content.addWidget(self._mic2_row_widget)
 
@@ -228,6 +230,19 @@ class SourceSelector(QWidget):
             print(f"[SourceSelector] Error refreshing app list: {e}")
             return
 
+        # Filter out hidden apps
+        hidden = []
+        if self._config:
+            try:
+                hidden = self._config.get("audio", "hidden_devices") or []
+            except (KeyError, TypeError):
+                pass
+        if hidden:
+            hidden_lower = [h.lower() for h in hidden]
+            apps = [a for a in apps if not any(
+                h in a["name"].lower() for h in hidden_lower
+            )]
+
         # Remember which app names were checked (stable across PID changes)
         checked_names = set()
         for i in range(self.app_list.count()):
@@ -279,6 +294,11 @@ class SourceSelector(QWidget):
         self._had_active_apps = any_checked_active
 
     def refresh_devices(self):
+        # Block signals while rebuilding combos so clear/addItem don't
+        # trigger _save_mic_selection with stale values
+        self.mic_combo.blockSignals(True)
+        self.mic2_combo.blockSignals(True)
+
         self.mic_combo.clear()
 
         # Get hidden device patterns from config
@@ -336,6 +356,9 @@ class SourceSelector(QWidget):
             idx = self.mic2_combo.findText(last_mic2)
             if idx >= 0:
                 self.mic2_combo.setCurrentIndex(idx)
+
+        self.mic_combo.blockSignals(False)
+        self.mic2_combo.blockSignals(False)
 
         # System audio dropdown - always populated
         self.loopback_combo.clear()
@@ -428,6 +451,15 @@ class SourceSelector(QWidget):
                     self.loopback_combo.setVisible(True)
             else:
                 self.radio_per_app.setChecked(True)
+
+    def _save_mic_selection(self):
+        """Persist mic choices immediately when the user changes a dropdown."""
+        if not self._config:
+            return
+        mic1_text = self.mic_combo.currentText() if self.mic_combo.currentData() is not None else ""
+        self._config.set("audio", "last_mic", mic1_text)
+        mic2_text = self.mic2_combo.currentText() if self.mic2_combo.currentData() is not None else ""
+        self._config.set("audio", "last_mic2", mic2_text)
 
     def save_capture_settings(self):
         """Save current capture mode, selected app names, and mic choices to config."""
