@@ -29,6 +29,7 @@ class Recorder(QObject):
     error_occurred = pyqtSignal(str)
     mic_level = pyqtSignal(object)
     system_level = pyqtSignal(object)
+    silence_detected = pyqtSignal(float)  # seconds of silence
 
     def __init__(self, config):
         super().__init__()
@@ -83,6 +84,15 @@ class Recorder(QObject):
             mic_callback=lambda chunk: self.mic_level.emit(chunk),
             system_callback=lambda chunk: self.system_level.emit(chunk),
         )
+
+        # Configure silence detection on system audio
+        if self.config.get("general", "silence_auto_stop"):
+            silence_dur = self.config.get("general", "silence_duration")
+            self._capture.set_silence_detection(
+                threshold=0.005,
+                duration=silence_dur,
+                callback=lambda secs: self.silence_detected.emit(secs),
+            )
 
         try:
             self._capture.start(session_dir)

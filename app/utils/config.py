@@ -43,6 +43,8 @@ DEFAULT_CONFIG = {
     "general": {
         "min_recording_length": 5,
         "auto_record": False,
+        "silence_auto_stop": True,
+        "silence_duration": 30,
     },
     "ui": {
         "theme": "dark",

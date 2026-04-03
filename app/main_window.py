@@ -218,6 +218,7 @@ class MainWindow(QMainWindow):
         # Auto-stop when call ends / auto-start when call begins
         self.source_selector.apps_went_inactive.connect(self._on_apps_went_inactive)
         self.source_selector.apps_became_active.connect(self._on_apps_became_active)
+        self.recorder.silence_detected.connect(self._on_silence_detected)
 
         # Recording header
         self.recording_header.name_changed.connect(self._on_recording_renamed)
@@ -287,6 +288,14 @@ class MainWindow(QMainWindow):
             if self.source_selector.is_per_app_mode():
                 self.status_label.setText("Call ended — stopping recording...")
                 self.recorder.stop_recording()
+
+    def _on_silence_detected(self, seconds):
+        """Auto-stop recording when system audio has been silent too long."""
+        if self.recorder.state in (RecordingState.RECORDING, RecordingState.PAUSED):
+            self.status_label.setText(
+                f"Silence detected ({seconds:.0f}s) — stopping recording..."
+            )
+            self.recorder.stop_recording()
 
     def _on_apps_became_active(self):
         """Auto-start recording when a checked app starts a call."""

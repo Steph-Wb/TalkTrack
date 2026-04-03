@@ -47,6 +47,23 @@ class SettingsDialog(QDialog):
         )
         recording_form.addRow(self.auto_record_cb)
 
+        self.silence_auto_stop_cb = QCheckBox("Auto-stop recording after sustained silence")
+        self.silence_auto_stop_cb.setToolTip(
+            "Automatically stop recording when the system/app audio\n"
+            "has been silent for the configured duration.\n"
+            "Only monitors remote audio, not your microphone."
+        )
+        recording_form.addRow(self.silence_auto_stop_cb)
+
+        self.silence_duration_spin = QSpinBox()
+        self.silence_duration_spin.setRange(5, 300)
+        self.silence_duration_spin.setSuffix(" seconds")
+        self.silence_duration_spin.setToolTip(
+            "How many seconds of silence on the remote audio\n"
+            "before auto-stopping the recording."
+        )
+        recording_form.addRow("Silence duration:", self.silence_duration_spin)
+
         general_layout.addWidget(recording_group)
         general_layout.addStretch()
 
@@ -316,6 +333,8 @@ class SettingsDialog(QDialog):
         min_rec = self.config.get("general", "min_recording_length")
         self.min_recording_spin.setValue(min_rec if min_rec else 0)
         self.auto_record_cb.setChecked(self.config.get("general", "auto_record"))
+        self.silence_auto_stop_cb.setChecked(self.config.get("general", "silence_auto_stop"))
+        self.silence_duration_spin.setValue(self.config.get("general", "silence_duration"))
 
         # Audio
         sr = self.config.get("audio", "sample_rate")
@@ -390,7 +409,6 @@ class SettingsDialog(QDialog):
                 "local_model_path": self.config.get("ai", "local_model_path") or "",
             }
 
-        self._current_provider = provider
         idx = self.ai_provider_combo.findData(provider)
         if idx >= 0:
             self.ai_provider_combo.setCurrentIndex(idx)
@@ -400,6 +418,8 @@ class SettingsDialog(QDialog):
     def _save_and_close(self):
         self.config.set("general", "min_recording_length", self.min_recording_spin.value())
         self.config.set("general", "auto_record", self.auto_record_cb.isChecked())
+        self.config.set("general", "silence_auto_stop", self.silence_auto_stop_cb.isChecked())
+        self.config.set("general", "silence_duration", self.silence_duration_spin.value())
 
         self.config.set("audio", "sample_rate", self.sample_rate_combo.currentData())
         self.config.set("audio", "channels", self.channels_combo.currentData())

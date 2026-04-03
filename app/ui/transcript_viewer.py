@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QProgressBar, QFileDialog, QScrollArea
+    QLabel, QProgressBar, QFileDialog, QScrollArea, QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QShortcut, QKeySequence
@@ -51,6 +51,8 @@ class TranscriptViewer(QWidget):
         self._player = None
         self._playing_index = -1
         self._continuous_play = False
+        self._user_scrolled = False  # True when user manually scrolled during playback
+        self._programmatic_scroll = False  # guard to ignore our own scrolls
         self._setup_ui()
 
     def _setup_ui(self):
@@ -123,6 +125,7 @@ class TranscriptViewer(QWidget):
         self._segments_layout.addStretch()
 
         self.scroll_area.setWidget(self._segments_container)
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
         # Placeholder text
         self._placeholder = QLabel(
@@ -142,6 +145,14 @@ class TranscriptViewer(QWidget):
         self.play_all_btn.setFixedWidth(90)
         self.play_all_btn.clicked.connect(self._on_play_all_clicked)
         export_row.addWidget(self.play_all_btn)
+
+        self.continue_from_cb = QCheckBox("Continue from here")
+        self.continue_from_cb.setToolTip(
+            "When checked, clicking a segment's play button\n"
+            "will continue playing all segments from that point."
+        )
+        self.continue_from_cb.setStyleSheet("color: #a6adc8; font-size: 12px;")
+        export_row.addWidget(self.continue_from_cb)
 
         export_row.addStretch()
 
@@ -312,17 +323,24 @@ class TranscriptViewer(QWidget):
     def _start_continuous_play(self, from_index):
         """Start playing all segments sequentially from the given index."""
         self._continuous_play = True
+        self._user_scrolled = False
         self.play_all_btn.setText("\u23f9 Stop")
         self._play_segment_at(from_index)
 
     def _stop_continuous_play(self):
         """Stop continuous playback."""
         self._continuous_play = False
+        self._user_scrolled = False
         self.play_all_btn.setText("\u25b6 Play All")
         if self._player:
             self._player.stop()
         self._clear_highlight()
         self._playing_index = -1
+
+    def _on_scroll(self):
+        """Track user-initiated scrolling during continuous playback."""
+        if self._continuous_play and not self._programmatic_scroll:
+            self._user_scrolled = True
 
     def _play_segment_at(self, index):
         """Play a specific segment and highlight it."""
@@ -341,8 +359,11 @@ class TranscriptViewer(QWidget):
         self._segment_widgets[index].set_playing(True)
         self._set_highlight(index)
 
-        # Scroll to the playing segment
-        self.scroll_area.ensureWidgetVisible(self._segment_widgets[index], 50, 50)
+        # Scroll to the playing segment (skip if user manually scrolled during continuous play)
+        if not (self._continuous_play and self._user_scrolled):
+            self._programmatic_scroll = True
+            self.scroll_area.ensureWidgetVisible(self._segment_widgets[index], 50, 50)
+            self._programmatic_scroll = False
 
     def _set_highlight(self, index):
         """Highlight the currently playing segment."""
@@ -366,6 +387,12 @@ class TranscriptViewer(QWidget):
         if self._continuous_play:
             self._clear_highlight()
             self._play_segment_at(index)
+            return
+
+        # "Continue from here" checkbox: start continuous play from this segment
+        if self.continue_from_cb.isChecked():
+            self._clear_highlight()
+            self._start_continuous_play(index)
             return
 
         # Stop previous

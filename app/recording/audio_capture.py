@@ -243,11 +243,31 @@ class DualAudioCapture:
         self.app_pids = app_pids or []
         self._mic_level_callback = None
         self._system_level_callback = None
+        # Silence detection (system audio only)
+        self._silence_threshold = 0.005  # RMS below this = silence
+        self._silence_duration = 30  # seconds of silence before firing
+        self._silence_callback = None
+        self._silent_since = None  # timestamp when silence started
+        self._silence_fired = False  # only fire once per silence stretch
 
     def set_level_callbacks(self, mic_callback, system_callback):
         """Set callbacks to receive audio level data from each channel."""
         self._mic_level_callback = mic_callback
         self._system_level_callback = system_callback
+
+    def set_silence_detection(self, threshold, duration, callback):
+        """Configure silence detection on the system audio stream.
+
+        Args:
+            threshold: RMS level below which audio counts as silence.
+            duration: Seconds of continuous silence before callback fires.
+            callback: Called (with silence duration) when silence threshold met.
+        """
+        self._silence_threshold = threshold
+        self._silence_duration = duration
+        self._silence_callback = callback
+        self._silent_since = None
+        self._silence_fired = False
 
     def start(self, output_dir):
         """Start recording both mic and system audio."""
@@ -292,10 +312,15 @@ class DualAudioCapture:
                 device_name = dev_info.get("name", "")
                 logger.info("System audio: looking for loopback of '%s'", device_name)
 
+                def _system_cb(chunk):
+                    if self._system_level_callback is not None:
+                        self._system_level_callback(chunk)
+                    self._check_silence(chunk)
+
                 self.loopback_stream = LoopbackStream(
                     device_name=device_name,
                     sample_rate=self.sample_rate,
-                    level_callback=self._system_level_callback,
+                    level_callback=_system_cb,
                 )
                 self.loopback_stream.start()
             except Exception as e:
@@ -317,6 +342,7 @@ class DualAudioCapture:
         if self._start_time:
             self._elapsed += time.time() - self._start_time
             self._start_time = None
+        self._silent_since = None  # don't count paused time as silence
 
     def resume(self):
         if self.mic_stream:
@@ -326,6 +352,8 @@ class DualAudioCapture:
         if self.loopback_stream:
             self.loopback_stream.resume()
         self._start_time = time.time()
+        self._silent_since = None
+        self._silence_fired = False  # allow re-detection after resume
 
     def stop(self):
         """Stop recording and return paths to saved audio files."""
@@ -433,6 +461,21 @@ class DualAudioCapture:
         if peak > 0:
             combined = combined / peak * 0.95
         return combined
+
+    def _check_silence(self, chunk):
+        """Check system audio chunk for silence, fire callback if sustained."""
+        if not self._silence_callback or self._silence_fired:
+            return
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        if rms < self._silence_threshold:
+            now = time.time()
+            if self._silent_since is None:
+                self._silent_since = now
+            elif now - self._silent_since >= self._silence_duration:
+                self._silence_fired = True
+                self._silence_callback(now - self._silent_since)
+        else:
+            self._silent_since = None
 
     def get_elapsed_time(self):
         """Return elapsed recording time in seconds."""
