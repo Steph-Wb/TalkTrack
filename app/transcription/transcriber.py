@@ -68,6 +68,24 @@ class TranscriptResult:
             lines.append(f"{timestamp} {speaker}{seg.text}")
         return "\n".join(lines)
 
+    def to_plain_text(self, speaker_names=None):
+        """Clipboard-friendly plain text: '{speaker}: {text}' per line, blank line between speaker changes, no timestamps."""
+        if not self.segments:
+            return ""
+        lines = []
+        prev_speaker = None
+        for seg in self.segments:
+            display = self._display_speaker(seg, speaker_names)
+            if prev_speaker is not None and seg.speaker != prev_speaker:
+                lines.append("")
+            text = seg.text.strip()
+            if display:
+                lines.append(f"{display}: {text}")
+            else:
+                lines.append(text)
+            prev_speaker = seg.speaker
+        return "\n".join(lines)
+
     def to_srt(self, speaker_names=None):
         lines = []
         for i, seg in enumerate(self.segments, 1):
