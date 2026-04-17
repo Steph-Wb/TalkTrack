@@ -143,7 +143,7 @@ class SourceSelector(QWidget):
         bottom_row.addWidget(self.refresh_btn)
         content.addLayout(bottom_row)
 
-        layout.addWidget(self._section, 1)
+        layout.addWidget(self._section)
 
         # Start expanded by default
         self._section.set_expanded(True)

@@ -146,9 +146,9 @@ class MainWindow(QMainWindow):
         )
         left_layout.addWidget(self.waveform)
 
-        # Audio sources (collapsible)
+        # Audio sources (collapsible) - no stretch so title sits at top when collapsed
         self.source_selector = SourceSelector(config=self.config)
-        left_layout.addWidget(self.source_selector, 1)
+        left_layout.addWidget(self.source_selector)
 
         # Recordings list
         recordings_dir = self.config.get("output", "directory")
