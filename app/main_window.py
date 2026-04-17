@@ -16,6 +16,7 @@ from app.recording.recorder import Recorder, RecordingState
 from app.transcription.transcriber import TranscriptionWorker, TranscriptResult
 from app.transcription.diarizer import DiarizationWorker, SimpleDiarizer
 from app.ui.recording_controls import RecordingControls
+from app.ui.meters_panel import MetersPanel
 from app.ui.source_selector import SourceSelector
 from app.ui.transcript_viewer import TranscriptViewer
 from app.ui.notes_panel import NotesPanel
@@ -40,6 +41,10 @@ class MainWindow(QMainWindow):
         self._transcription_worker = None
         self._diarization_worker = None
         self._mic_muted = False
+        self._pending_gain = None  # holds latest slider value awaiting debounced save
+        self._gain_save_timer = QTimer(self)
+        self._gain_save_timer.setSingleShot(True)
+        self._gain_save_timer.timeout.connect(self._flush_gain_to_config)
 
         self.setWindowTitle("TalkTrack - Call Recorder, Transcriber & AI Summary")
         self.setMinimumSize(1000, 700)
@@ -129,6 +134,11 @@ class MainWindow(QMainWindow):
         self.recording_controls = RecordingControls()
         left_layout.addWidget(self.recording_controls)
 
+        self.meters_panel = MetersPanel()
+        self.meters_panel.set_gain(self.config.get("audio", "mic_gain"))
+        self.meters_panel.gain_changed.connect(self._on_gain_changed)
+        left_layout.addWidget(self.meters_panel)
+
         # Waveform display (hidden until recording starts)
         self.waveform = WaveformDisplay(
             seconds=5,
@@ -203,9 +213,9 @@ class MainWindow(QMainWindow):
         self.recorder.recording_finished.connect(self._on_recording_finished)
         self.recorder.recording_discarded.connect(self._on_recording_discarded)
         self.recorder.error_occurred.connect(self._on_error)
-        self.recorder.mic_level.connect(self.recording_controls.update_mic_level)
+        self.recorder.mic_level.connect(self.meters_panel.update_mic_level)
         self.recorder.mic_level.connect(self.waveform.append_audio)
-        self.recorder.system_level.connect(self.recording_controls.update_system_level)
+        self.recorder.system_level.connect(self.meters_panel.update_system_level)
         self.recorder.system_level.connect(self.waveform.append_system_audio)
 
         # Transcript
@@ -275,6 +285,10 @@ class MainWindow(QMainWindow):
             self.recorder._capture.set_muted(self._mic_muted)
         self.recording_controls.set_muted(self._mic_muted)
         self.waveform.set_mic_muted(self._mic_muted)
+        # Apply saved mic gain
+        mic_gain = self.config.get("audio", "mic_gain")
+        if self.recorder._capture is not None:
+            self.recorder._capture.set_gain(mic_gain)
         self.notes_panel.set_recording_start(datetime.now())
         self.chat_panel.clear_chat()
         self.status_label.setText("Recording...")
@@ -297,6 +311,22 @@ class MainWindow(QMainWindow):
         self.recording_controls.set_muted(self._mic_muted)
         self.waveform.set_mic_muted(self._mic_muted)
         self.status_label.setText("Microphone muted" if self._mic_muted else "Recording...")
+
+    def _on_gain_changed(self, gain):
+        """Slider moved - apply live gain to capture, debounce config write."""
+        self._pending_gain = float(gain)
+        if self.recorder._capture is not None:
+            self.recorder._capture.set_gain(gain)
+        self._gain_save_timer.start(500)
+
+    def _flush_gain_to_config(self):
+        """Write pending gain value to config."""
+        if self._pending_gain is None:
+            return
+        if self._pending_gain != self.config.get("audio", "mic_gain"):
+            self.config.set("audio", "mic_gain", self._pending_gain)
+            self.config.save()
+        self._pending_gain = None
 
     def _stop_recording(self):
         self.recorder.stop_recording()
@@ -351,7 +381,7 @@ class MainWindow(QMainWindow):
             self.source_selector.set_recording_active(False)
             self.waveform.stop()
             self.recording_controls.reset_timer()
-            self.recording_controls.reset_levels()
+            self.meters_panel.reset()
             self._mic_muted = False
             self.waveform.set_mic_muted(False)
 
@@ -896,6 +926,9 @@ class MainWindow(QMainWindow):
                 json.dump(items, f, indent=2)
 
     def closeEvent(self, event):
+        if self._gain_save_timer.isActive():
+            self._gain_save_timer.stop()
+            self._flush_gain_to_config()
         if self.recorder.state != RecordingState.IDLE:
             reply = QMessageBox.question(
                 self,
