@@ -90,5 +90,55 @@ class TestAudioStreamMute(unittest.TestCase):
         self.assertEqual(float(received[0].max()), 0.0)
 
 
+class TestDualAudioCaptureMute(unittest.TestCase):
+    """DualAudioCapture.set_muted propagates to both mic streams."""
+
+    def _fake_stream(self):
+        """Return an AudioStream instance that is not backed by a real device."""
+        from app.recording.audio_capture import AudioStream
+        s = AudioStream(device_index=None, sample_rate=16000, channels=1)
+        return s
+
+    def test_set_muted_single_mic(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.mic_stream = self._fake_stream()
+        cap.set_muted(True)
+        self.assertTrue(cap.mic_stream._muted)
+        self.assertTrue(cap.is_muted)
+
+    def test_set_muted_propagates_to_second_mic(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.mic_stream = self._fake_stream()
+        cap.mic_stream_2 = self._fake_stream()
+        cap.set_muted(True)
+        self.assertTrue(cap.mic_stream._muted)
+        self.assertTrue(cap.mic_stream_2._muted)
+
+    def test_unmute_propagates(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.mic_stream = self._fake_stream()
+        cap.mic_stream_2 = self._fake_stream()
+        cap.set_muted(True)
+        cap.set_muted(False)
+        self.assertFalse(cap.mic_stream._muted)
+        self.assertFalse(cap.mic_stream_2._muted)
+        self.assertFalse(cap.is_muted)
+
+    def test_set_muted_with_no_streams_does_not_raise(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        # mic_stream and mic_stream_2 are both None
+        cap.set_muted(True)
+        self.assertTrue(cap.is_muted)
+
+    def test_default_is_not_muted(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        self.assertFalse(cap.is_muted)
+
+
 if __name__ == "__main__":
     unittest.main()

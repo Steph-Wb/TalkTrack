@@ -256,11 +256,24 @@ class DualAudioCapture:
         self._silence_callback = None
         self._silent_since = None  # timestamp when silence started
         self._silence_fired = False  # only fire once per silence stretch
+        self._muted = False
 
     def set_level_callbacks(self, mic_callback, system_callback):
         """Set callbacks to receive audio level data from each channel."""
         self._mic_level_callback = mic_callback
         self._system_level_callback = system_callback
+
+    def set_muted(self, muted):
+        """Mute or unmute all microphone streams in this capture session."""
+        self._muted = bool(muted)
+        if self.mic_stream is not None:
+            self.mic_stream.set_muted(self._muted)
+        if self.mic_stream_2 is not None:
+            self.mic_stream_2.set_muted(self._muted)
+
+    @property
+    def is_muted(self):
+        return self._muted
 
     def set_silence_detection(self, threshold, duration, callback):
         """Configure silence detection on the system audio stream.
@@ -296,6 +309,8 @@ class DualAudioCapture:
                 level_callback=self._mic_level_callback,
             )
             self.mic_stream.start()
+            if self._muted:
+                self.mic_stream.set_muted(True)
             logger.info("Mic stream started on device %s", self.mic_device)
         else:
             logger.warning("No mic device selected")
@@ -309,6 +324,8 @@ class DualAudioCapture:
                 level_callback=self._mic_level_callback,
             )
             self.mic_stream_2.start()
+            if self._muted:
+                self.mic_stream_2.set_muted(True)
             logger.info("Mic stream 2 started on device %s", self.mic_device_2)
 
         # System audio capture (PyAudioWPatch WASAPI loopback)
