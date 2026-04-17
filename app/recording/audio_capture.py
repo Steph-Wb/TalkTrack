@@ -265,6 +265,7 @@ class DualAudioCapture:
         self._silent_since = None  # timestamp when silence started
         self._silence_fired = False  # only fire once per silence stretch
         self._muted = False
+        self.mic_gain = 1.0
 
     def set_level_callbacks(self, mic_callback, system_callback):
         """Set callbacks to receive audio level data from each channel."""
@@ -278,6 +279,14 @@ class DualAudioCapture:
             self.mic_stream.set_muted(self._muted)
         if self.mic_stream_2 is not None:
             self.mic_stream_2.set_muted(self._muted)
+
+    def set_gain(self, gain):
+        """Set the mic gain multiplier for all microphone streams in this capture session."""
+        self.mic_gain = float(gain)
+        if self.mic_stream is not None:
+            self.mic_stream.set_gain(self.mic_gain)
+        if self.mic_stream_2 is not None:
+            self.mic_stream_2.set_gain(self.mic_gain)
 
     @property
     def is_muted(self):
@@ -319,6 +328,8 @@ class DualAudioCapture:
             self.mic_stream.start()
             if self._muted:
                 self.mic_stream.set_muted(True)
+            if self.mic_gain != 1.0:
+                self.mic_stream.set_gain(self.mic_gain)
             logger.info("Mic stream started on device %s", self.mic_device)
         else:
             logger.warning("No mic device selected")
@@ -334,6 +345,8 @@ class DualAudioCapture:
             self.mic_stream_2.start()
             if self._muted:
                 self.mic_stream_2.set_muted(True)
+            if self.mic_gain != 1.0:
+                self.mic_stream_2.set_gain(self.mic_gain)
             logger.info("Mic stream 2 started on device %s", self.mic_device_2)
 
         # System audio capture (PyAudioWPatch WASAPI loopback)

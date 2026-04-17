@@ -217,5 +217,48 @@ class TestAudioStreamGain(unittest.TestCase):
         self.assertAlmostEqual(float(received[0].max()), 0.6, places=5)
 
 
+class TestDualAudioCaptureGain(unittest.TestCase):
+    """DualAudioCapture.set_gain propagates to both mic streams."""
+
+    def _fake_stream(self):
+        from app.recording.audio_capture import AudioStream
+        return AudioStream(device_index=None, sample_rate=16000, channels=1)
+
+    def test_default_gain_is_1(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        self.assertEqual(cap.mic_gain, 1.0)
+
+    def test_set_gain_single_mic(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.mic_stream = self._fake_stream()
+        cap.set_gain(2.5)
+        self.assertEqual(cap.mic_gain, 2.5)
+        self.assertEqual(cap.mic_stream._gain, 2.5)
+
+    def test_set_gain_propagates_to_second_mic(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.mic_stream = self._fake_stream()
+        cap.mic_stream_2 = self._fake_stream()
+        cap.set_gain(3.0)
+        self.assertEqual(cap.mic_stream._gain, 3.0)
+        self.assertEqual(cap.mic_stream_2._gain, 3.0)
+
+    def test_set_gain_with_no_streams_does_not_raise(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.set_gain(2.0)
+        self.assertEqual(cap.mic_gain, 2.0)
+
+    def test_set_gain_coerces_to_float(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.set_gain(2)
+        self.assertEqual(cap.mic_gain, 2.0)
+        self.assertIsInstance(cap.mic_gain, float)
+
+
 if __name__ == "__main__":
     unittest.main()
