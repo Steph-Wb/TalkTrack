@@ -15,6 +15,7 @@ DEFAULT_CONFIG = {
         "selected_apps": [],
         "hidden_devices": [],
         "mic_count": 1,
+        "mic_mute_on_start": False,
     },
     "output": {
         "directory": str(Path(__file__).parent.parent.parent / "recordings"),
