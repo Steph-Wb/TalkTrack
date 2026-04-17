@@ -140,5 +140,82 @@ class TestDualAudioCaptureMute(unittest.TestCase):
         self.assertFalse(cap.is_muted)
 
 
+class TestAudioStreamGain(unittest.TestCase):
+    """AudioStream.set_gain multiplies samples and clips to [-1, 1]."""
+
+    def _make_stream(self, gain=None):
+        from app.recording.audio_capture import AudioStream
+        stream = AudioStream(device_index=None, sample_rate=16000, channels=1)
+        stream._recording = True
+        stream._paused = False
+        if gain is not None:
+            stream.set_gain(gain)
+        return stream
+
+    def test_default_gain_is_1(self):
+        from app.recording.audio_capture import AudioStream
+        stream = AudioStream(device_index=None, sample_rate=16000, channels=1)
+        self.assertEqual(stream._gain, 1.0)
+
+    def test_gain_1_does_not_change_samples(self):
+        stream = self._make_stream(gain=1.0)
+        chunk = np.ones((64, 1), dtype=np.float32) * 0.3
+        stream._audio_callback(chunk, 64, None, None)
+        self.assertAlmostEqual(float(stream._all_chunks[0].max()), 0.3, places=5)
+
+    def test_gain_multiplies_samples(self):
+        stream = self._make_stream(gain=2.0)
+        chunk = np.ones((64, 1), dtype=np.float32) * 0.3
+        stream._audio_callback(chunk, 64, None, None)
+        self.assertAlmostEqual(float(stream._all_chunks[0].max()), 0.6, places=5)
+
+    def test_gain_clips_at_positive_one(self):
+        stream = self._make_stream(gain=3.0)
+        chunk = np.ones((64, 1), dtype=np.float32) * 0.5
+        stream._audio_callback(chunk, 64, None, None)
+        self.assertEqual(float(stream._all_chunks[0].max()), 1.0)
+
+    def test_gain_clips_at_negative_one(self):
+        stream = self._make_stream(gain=3.0)
+        chunk = np.ones((64, 1), dtype=np.float32) * -0.5
+        stream._audio_callback(chunk, 64, None, None)
+        self.assertEqual(float(stream._all_chunks[0].min()), -1.0)
+
+    def test_gain_below_one_attenuates(self):
+        stream = self._make_stream(gain=0.5)
+        chunk = np.ones((64, 1), dtype=np.float32) * 0.8
+        stream._audio_callback(chunk, 64, None, None)
+        self.assertAlmostEqual(float(stream._all_chunks[0].max()), 0.4, places=5)
+
+    def test_mute_beats_gain(self):
+        stream = self._make_stream(gain=5.0)
+        stream.set_muted(True)
+        chunk = np.ones((64, 1), dtype=np.float32) * 0.5
+        stream._audio_callback(chunk, 64, None, None)
+        self.assertEqual(float(stream._all_chunks[0].max()), 0.0)
+
+    def test_set_gain_coerces_to_float(self):
+        stream = self._make_stream()
+        stream.set_gain(2)
+        self.assertEqual(stream._gain, 2.0)
+        self.assertIsInstance(stream._gain, float)
+
+    def test_level_callback_receives_gained_chunk(self):
+        received = []
+        from app.recording.audio_capture import AudioStream
+        stream = AudioStream(
+            device_index=None, sample_rate=16000, channels=1,
+            level_callback=lambda c: received.append(c),
+        )
+        stream._recording = True
+        stream._paused = False
+        stream.set_gain(2.0)
+        stream._audio_callback(
+            np.ones((32, 1), dtype=np.float32) * 0.3, 32, None, None
+        )
+        self.assertEqual(len(received), 1)
+        self.assertAlmostEqual(float(received[0].max()), 0.6, places=5)
+
+
 if __name__ == "__main__":
     unittest.main()

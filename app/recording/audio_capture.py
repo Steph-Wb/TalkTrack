@@ -25,12 +25,16 @@ class AudioStream:
         self._paused = False
         self._all_chunks = []
         self._muted = False
+        self._gain = 1.0
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
             logger.debug("Audio stream status: %s", status)
         if self._recording and not self._paused:
             chunk = indata.copy()
+            if self._gain != 1.0:
+                chunk *= self._gain
+                np.clip(chunk, -1.0, 1.0, out=chunk)
             if self._muted:
                 chunk.fill(0.0)
             self._buffer.put(chunk)
@@ -65,6 +69,10 @@ class AudioStream:
     def set_muted(self, muted):
         """Mute or unmute the mic. Muted streams keep recording but write silence."""
         self._muted = bool(muted)
+
+    def set_gain(self, gain):
+        """Set the mic gain multiplier. Values outside [-1, 1] after multiplication are hard-clipped."""
+        self._gain = float(gain)
 
     def stop(self):
         self._recording = False
