@@ -1,10 +1,10 @@
 """Transcript viewer with interactive segment editing, playback, and speaker naming."""
-import json
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QProgressBar, QFileDialog, QScrollArea, QCheckBox
+    QLabel, QProgressBar, QFileDialog, QScrollArea, QCheckBox,
+    QApplication, QToolTip,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QShortcut, QKeySequence
@@ -158,6 +158,15 @@ class TranscriptViewer(QWidget):
 
         export_row.addStretch()
 
+        self.copy_all_btn = QPushButton("Copy All")
+        self.copy_all_btn.setEnabled(False)
+        self.copy_all_btn.setToolTip(
+            "Copy the entire transcript to the clipboard as plain text\n"
+            "(speakers + text, no timestamps)."
+        )
+        self.copy_all_btn.clicked.connect(self._on_copy_all_clicked)
+        export_row.addWidget(self.copy_all_btn)
+
         self.export_txt_btn = QPushButton("Export TXT")
         self.export_txt_btn.setEnabled(False)
         self.export_txt_btn.clicked.connect(lambda: self._export("txt"))
@@ -167,11 +176,6 @@ class TranscriptViewer(QWidget):
         self.export_srt_btn.setEnabled(False)
         self.export_srt_btn.clicked.connect(lambda: self._export("srt"))
         export_row.addWidget(self.export_srt_btn)
-
-        self.export_json_btn = QPushButton("Export JSON")
-        self.export_json_btn.setEnabled(False)
-        self.export_json_btn.clicked.connect(lambda: self._export("json"))
-        export_row.addWidget(self.export_json_btn)
 
         layout.addLayout(export_row)
 
@@ -264,9 +268,9 @@ class TranscriptViewer(QWidget):
         self.speaker_panel.set_speakers(transcript.segments, self._speaker_names)
 
         # Enable export and playback buttons
+        self.copy_all_btn.setEnabled(True)
         self.export_txt_btn.setEnabled(True)
         self.export_srt_btn.setEnabled(True)
-        self.export_json_btn.setEnabled(True)
         self.play_all_btn.setEnabled(self._audio_path is not None)
 
     def clear(self):
@@ -296,9 +300,9 @@ class TranscriptViewer(QWidget):
         self._segments_layout.addStretch()
 
         # Disable export, playback, and transcribe buttons
+        self.copy_all_btn.setEnabled(False)
         self.export_txt_btn.setEnabled(False)
         self.export_srt_btn.setEnabled(False)
-        self.export_json_btn.setEnabled(False)
         self.play_all_btn.setEnabled(False)
         self.transcribe_btn.setEnabled(False)
         self._stop_continuous_play()
@@ -491,7 +495,6 @@ class TranscriptViewer(QWidget):
         filters = {
             "txt": "Text Files (*.txt)",
             "srt": "SRT Subtitle Files (*.srt)",
-            "json": "JSON Files (*.json)",
         }
 
         path, _ = QFileDialog.getSaveFileName(
@@ -507,10 +510,15 @@ class TranscriptViewer(QWidget):
             content = self._transcript.to_text(speaker_names=names)
         elif format_type == "srt":
             content = self._transcript.to_srt(speaker_names=names)
-        elif format_type == "json":
-            content = json.dumps(
-                self._transcript.to_dict(speaker_names=names), indent=2
-            )
 
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+
+    def _on_copy_all_clicked(self):
+        if not self._transcript or not self._transcript.segments:
+            return
+        text = self._transcript.to_plain_text(speaker_names=self._speaker_names)
+        QApplication.clipboard().setText(text)
+        count = len(self._transcript.segments)
+        pos = self.copy_all_btn.mapToGlobal(self.copy_all_btn.rect().bottomLeft())
+        QToolTip.showText(pos, f"Copied {count} segments to clipboard", self.copy_all_btn, self.copy_all_btn.rect(), 2000)
