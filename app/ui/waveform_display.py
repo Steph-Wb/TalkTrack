@@ -78,6 +78,7 @@ class WaveformDisplay(QWidget):
         self.setMinimumHeight(90)
         self.setMaximumHeight(120)
         self.setVisible(False)
+        self._mic_muted = False
 
         self._paint_timer = QTimer(self)
         self._paint_timer.timeout.connect(self.update)
@@ -94,6 +95,7 @@ class WaveformDisplay(QWidget):
         self.setVisible(False)
         self._mic_buffer.clear()
         self._sys_buffer.clear()
+        self._mic_muted = False
 
     def append_audio(self, chunk: np.ndarray):
         """Append microphone audio data."""
@@ -102,6 +104,11 @@ class WaveformDisplay(QWidget):
     def append_system_audio(self, chunk: np.ndarray):
         """Append system/app audio data."""
         self._sys_buffer.append(chunk)
+
+    def set_mic_muted(self, muted):
+        """Show a 'MIC MUTED' overlay on the mic (top) half of the waveform."""
+        self._mic_muted = bool(muted)
+        self.update()
 
     def _draw_waveform(self, painter, data, color, x, y, w, h):
         """Draw a single waveform in the given rect."""
@@ -153,6 +160,26 @@ class WaveformDisplay(QWidget):
             painter, mic_data, mic_color,
             label_w, 0, wave_w, half_h - gap,
         )
+
+        if self._mic_muted:
+            overlay_x = label_w
+            overlay_y = 0
+            overlay_w = wave_w
+            overlay_h = int(half_h - gap)
+            painter.fillRect(
+                overlay_x, overlay_y, overlay_w, overlay_h,
+                QColor(243, 139, 168, 90),  # Catppuccin red, semi-transparent
+            )
+            overlay_font = QFont()
+            overlay_font.setPixelSize(14)
+            overlay_font.setBold(True)
+            painter.setFont(overlay_font)
+            painter.setPen(QColor("#f38ba8"))
+            painter.drawText(
+                overlay_x, overlay_y, overlay_w, overlay_h,
+                Qt.AlignmentFlag.AlignCenter,
+                "MIC MUTED",
+            )
 
         # Draw system waveform (bottom half)
         self._draw_waveform(
