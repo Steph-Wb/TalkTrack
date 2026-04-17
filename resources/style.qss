@@ -575,3 +575,18 @@ QToolTip {
 #leftPanel #timerLabel {
     font-size: 13pt;
 }
+
+/* Collapsible section title band */
+QFrame#collapsibleHeader {
+    background-color: #313244;
+    border-radius: 4px;
+}
+
+/* Meters + gain panel: lighter background to set it apart */
+#metersPanel {
+    background-color: #252537;
+    border-radius: 6px;
+}
+#metersPanel QLabel {
+    background-color: transparent;
+}

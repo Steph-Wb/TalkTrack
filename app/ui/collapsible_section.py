@@ -1,6 +1,6 @@
 """Reusable collapsible section with a clickable title header."""
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QToolButton, QVBoxLayout, QWidget
 
 
 class CollapsibleSection(QWidget):
@@ -18,10 +18,12 @@ class CollapsibleSection(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header row: toggle button on the left, extras (Refresh, etc.)
-        # can be added on the right via add_header_widget().
-        self._header_row = QHBoxLayout()
-        self._header_row.setContentsMargins(0, 0, 0, 0)
+        # Header frame: distinct background so the section title reads as a
+        # band. Extras (Refresh, etc.) can be added via add_header_widget().
+        self._header_frame = QFrame()
+        self._header_frame.setObjectName("collapsibleHeader")
+        self._header_row = QHBoxLayout(self._header_frame)
+        self._header_row.setContentsMargins(6, 2, 6, 2)
         self._header_row.setSpacing(4)
 
         self._toggle_btn = QToolButton()
@@ -32,13 +34,14 @@ class CollapsibleSection(QWidget):
         self._toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self._toggle_btn.toggled.connect(self._on_toggled)
         self._toggle_btn.setStyleSheet(
-            "QToolButton { border: none; color: #89b4fa; font-weight: bold; "
+            "QToolButton { border: none; background: transparent; "
+            "color: #89b4fa; font-weight: bold; "
             "text-align: left; padding: 4px 0; }"
             "QToolButton:hover { color: #b4befe; }"
         )
         self._header_row.addWidget(self._toggle_btn)
         self._header_row.addStretch()
-        layout.addLayout(self._header_row)
+        layout.addWidget(self._header_frame)
 
         self._content = QWidget()
         self._content.setVisible(False)
@@ -49,7 +52,7 @@ class CollapsibleSection(QWidget):
         self._title = title
 
         # Start collapsed: clamp height to the title bar
-        self.setMaximumHeight(self._toggle_btn.sizeHint().height() + 4)
+        self.setMaximumHeight(self._header_frame.sizeHint().height())
 
     def add_header_widget(self, widget):
         """Add a widget to the right side of the header row."""
@@ -68,7 +71,7 @@ class CollapsibleSection(QWidget):
         if checked:
             self.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
         else:
-            self.setMaximumHeight(self._toggle_btn.sizeHint().height() + 4)
+            self.setMaximumHeight(self._header_frame.sizeHint().height())
         self.toggled.emit(checked)
 
     def set_expanded(self, expanded):

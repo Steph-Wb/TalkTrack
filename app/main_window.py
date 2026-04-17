@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.recording_controls)
 
         self.meters_panel = MetersPanel()
+        self.meters_panel.setObjectName("metersPanel")
         self.meters_panel.set_gain(self.config.get("audio", "mic_gain"))
         self.meters_panel.gain_changed.connect(self._on_gain_changed)
         left_layout.addWidget(self.meters_panel)

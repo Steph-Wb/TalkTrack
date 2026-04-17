@@ -85,22 +85,13 @@ class SourceSelector(QWidget):
         else:
             self._setup_legacy_ui(content)
 
-        # Auto-refresh + Refresh Devices live in the section header so they
-        # don't eat vertical space from the app list.
-        if self._win11:
-            self.auto_refresh_check = QCheckBox("Auto-refresh")
-            self.auto_refresh_check.setChecked(True)
-            self.auto_refresh_check.toggled.connect(self._on_auto_refresh_toggled)
-            self.auto_refresh_check.setStyleSheet("font-size: 11px;")
-            self._section.add_header_widget(self.auto_refresh_check)
-
-        self.refresh_btn = QPushButton("\u21bb")
-        self.refresh_btn.setToolTip("Refresh audio devices")
-        self.refresh_btn.setFixedSize(24, 22)
-        self.refresh_btn.clicked.connect(self.refresh_devices)
-        self._section.add_header_widget(self.refresh_btn)
-
         layout.addWidget(self._section)
+
+        # Refresh devices when the section is expanded (picks up any mic or
+        # output device the user plugged in while the section was closed).
+        self._section.toggled.connect(
+            lambda expanded: self.refresh_devices() if expanded else None
+        )
 
         # Start expanded by default
         self._section.set_expanded(True)
@@ -140,10 +131,13 @@ class SourceSelector(QWidget):
         mode_row.addWidget(self.radio_legacy, 1)
         parent_layout.addLayout(mode_row)
 
-        # App list (checkable)
+        # App list (checkable). Scrollbar shows automatically when the list
+        # has more items than its visible area can fit.
         self.app_list = QListWidget()
         self.app_list.setObjectName("appAudioList")
-        self.app_list.setMinimumHeight(180)
+        self.app_list.setMinimumHeight(120)
+        self.app_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.app_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         parent_layout.addWidget(self.app_list, 1)
 
         # Hidden legacy combo for fallback
@@ -158,12 +152,6 @@ class SourceSelector(QWidget):
             is_per_app = button_id == 0
             self.app_list.setVisible(is_per_app)
             self.loopback_combo.setVisible(not is_per_app)
-
-    def _on_auto_refresh_toggled(self, checked):
-        if checked:
-            self._start_auto_refresh()
-        else:
-            self._stop_auto_refresh()
 
     def _start_auto_refresh(self):
         if self._auto_refresh_timer is None:
