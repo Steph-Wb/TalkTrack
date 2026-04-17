@@ -126,7 +126,7 @@ class MainWindow(QMainWindow):
 
         # Left panel: controls at top, sources collapsible, recordings below
         left_panel = QWidget()
-        left_panel.setMaximumWidth(500)
+        left_panel.setFixedWidth(400)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(8, 8, 8, 8)
 
@@ -191,7 +191,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.tabs)
         splitter.addWidget(right_panel)
 
-        splitter.setSizes([350, 910])
+        splitter.setSizes([400, 860])
         main_layout.addWidget(splitter)
 
     def _setup_statusbar(self):
