@@ -5,14 +5,13 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 from app.recording.recorder import RecordingState
-from app.ui.level_meter import LevelBar, compute_rms_db, db_to_fraction
 
 
 class RecordingControls(QWidget):
-    """Recording control buttons, timer, and level meters — compact two-row layout.
+    """Recording control buttons and timer — compact two-row layout.
 
     Row 1: [● Rec] [⏸ Pause] [■ Stop] [🎤 Mute]
-    Row 2: ● 00:12:34  Mic ▓▓▓▓  Sys ▓▓▓▓
+    Row 2: ● 00:12:34
     """
 
     record_clicked = pyqtSignal()
@@ -63,7 +62,7 @@ class RecordingControls(QWidget):
 
         layout.addLayout(btn_row)
 
-        # Row 2: Indicator + timer + level meters
+        # Row 2: Indicator + timer
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
 
@@ -77,18 +76,7 @@ class RecordingControls(QWidget):
         self.timer_label.setObjectName("timerLabel")
         status_row.addWidget(self.timer_label)
 
-        # Level meters inline
-        mic_label = QLabel("Mic")
-        mic_label.setStyleSheet("color: #a6adc8; font-size: 10px;")
-        status_row.addWidget(mic_label)
-        self._mic_bar = LevelBar()
-        status_row.addWidget(self._mic_bar, 1)
-
-        sys_label = QLabel("Sys")
-        sys_label.setStyleSheet("color: #a6adc8; font-size: 10px;")
-        status_row.addWidget(sys_label)
-        self._sys_bar = LevelBar()
-        status_row.addWidget(self._sys_bar, 1)
+        status_row.addStretch()
 
         layout.addLayout(status_row)
 
@@ -131,18 +119,6 @@ class RecordingControls(QWidget):
         m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
         self.timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
-
-    def update_mic_level(self, audio_chunk):
-        db = compute_rms_db(audio_chunk)
-        self._mic_bar.set_level(db_to_fraction(db))
-
-    def update_system_level(self, audio_chunk):
-        db = compute_rms_db(audio_chunk)
-        self._sys_bar.set_level(db_to_fraction(db))
-
-    def reset_levels(self):
-        self._mic_bar.reset()
-        self._sys_bar.reset()
 
     def set_muted(self, muted):
         """Update the mute button visual state."""
