@@ -436,7 +436,6 @@ class SourceSelector(QWidget):
         self.mic_combo.setEnabled(enabled)
         self.mic2_combo.setEnabled(enabled)
         self.loopback_combo.setEnabled(enabled)
-        self.refresh_btn.setEnabled(enabled)
         if self.app_list is not None:
             self.app_list.setEnabled(enabled)
         if self.mode_group:
