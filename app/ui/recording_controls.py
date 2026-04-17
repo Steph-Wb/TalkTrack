@@ -18,10 +18,12 @@ class RecordingControls(QWidget):
     record_clicked = pyqtSignal()
     pause_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
+    mute_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._setup_ui()
+        self._muted = False
         self._blink_state = True
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._toggle_indicator)
@@ -50,6 +52,14 @@ class RecordingControls(QWidget):
         self.stop_btn.setObjectName("stopButton")
         self.stop_btn.clicked.connect(self.stop_clicked.emit)
         btn_row.addWidget(self.stop_btn)
+
+        self.mute_btn = QPushButton("\U0001f3a4 Mute")
+        self.mute_btn.setObjectName("muteButton")
+        self.mute_btn.setToolTip(
+            "Mute the microphone while keeping system/app audio recording."
+        )
+        self.mute_btn.clicked.connect(self.mute_clicked.emit)
+        btn_row.addWidget(self.mute_btn)
 
         layout.addLayout(btn_row)
 
@@ -89,6 +99,8 @@ class RecordingControls(QWidget):
             self.pause_btn.setEnabled(False)
             self.pause_btn.setText("\u23f8 Pause")
             self.stop_btn.setEnabled(False)
+            self.mute_btn.setEnabled(False)
+            self.set_muted(False)
             self.recording_indicator.setText("")
             self._blink_timer.stop()
         elif state == RecordingState.RECORDING:
@@ -96,18 +108,21 @@ class RecordingControls(QWidget):
             self.pause_btn.setEnabled(True)
             self.pause_btn.setText("\u23f8 Pause")
             self.stop_btn.setEnabled(True)
+            self.mute_btn.setEnabled(True)
             self._blink_timer.start(500)
         elif state == RecordingState.PAUSED:
             self.record_btn.setEnabled(False)
             self.pause_btn.setEnabled(True)
             self.pause_btn.setText("\u25b6 Resume")
             self.stop_btn.setEnabled(True)
+            self.mute_btn.setEnabled(True)
             self.recording_indicator.setText("\u23f8")
             self._blink_timer.stop()
         elif state == RecordingState.STOPPING:
             self.record_btn.setEnabled(False)
             self.pause_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
+            self.mute_btn.setEnabled(False)
             self.recording_indicator.setText("")
             self._blink_timer.stop()
 
@@ -128,6 +143,20 @@ class RecordingControls(QWidget):
     def reset_levels(self):
         self._mic_bar.reset()
         self._sys_bar.reset()
+
+    def set_muted(self, muted):
+        """Update the mute button visual state."""
+        self._muted = bool(muted)
+        if self._muted:
+            self.mute_btn.setText("\U0001f3a4 Muted")
+            self.mute_btn.setStyleSheet(
+                "QPushButton#muteButton { "
+                "background-color: #f38ba8; color: #1e1e2e; "
+                "border: 1px solid #f38ba8; font-weight: bold; }"
+            )
+        else:
+            self.mute_btn.setText("\U0001f3a4 Mute")
+            self.mute_btn.setStyleSheet("")
 
     def _toggle_indicator(self):
         self._blink_state = not self._blink_state
