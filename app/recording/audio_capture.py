@@ -24,12 +24,15 @@ class AudioStream:
         self._recording = False
         self._paused = False
         self._all_chunks = []
+        self._muted = False
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
             logger.debug("Audio stream status: %s", status)
         if self._recording and not self._paused:
             chunk = indata.copy()
+            if self._muted:
+                chunk.fill(0.0)
             self._buffer.put(chunk)
             self._all_chunks.append(chunk)
             if self._level_callback is not None:
@@ -58,6 +61,10 @@ class AudioStream:
 
     def resume(self):
         self._paused = False
+
+    def set_muted(self, muted):
+        """Mute or unmute the mic. Muted streams keep recording but write silence."""
+        self._muted = bool(muted)
 
     def stop(self):
         self._recording = False

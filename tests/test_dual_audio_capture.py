@@ -28,5 +28,67 @@ class TestDualAudioCaptureMode(unittest.TestCase):
         self.assertEqual(cap.app_pids, [123, 456])
 
 
+import numpy as np
+
+
+class TestAudioStreamMute(unittest.TestCase):
+    """AudioStream.set_muted zeros audio chunks but preserves length."""
+
+    def _make_stream(self):
+        from app.recording.audio_capture import AudioStream
+        stream = AudioStream(device_index=None, sample_rate=16000, channels=1)
+        # Simulate active recording without opening a real device
+        stream._recording = True
+        stream._paused = False
+        return stream
+
+    def test_unmuted_writes_original_samples(self):
+        stream = self._make_stream()
+        chunk = np.ones((256, 1), dtype=np.float32) * 0.5
+        stream._audio_callback(chunk, 256, None, None)
+        written = stream._all_chunks[0]
+        self.assertEqual(written.shape, (256, 1))
+        self.assertAlmostEqual(float(written.max()), 0.5)
+
+    def test_muted_zeros_samples_but_preserves_length(self):
+        stream = self._make_stream()
+        stream.set_muted(True)
+        chunk = np.ones((256, 1), dtype=np.float32) * 0.5
+        stream._audio_callback(chunk, 256, None, None)
+        written = stream._all_chunks[0]
+        self.assertEqual(written.shape, (256, 1))
+        self.assertEqual(float(written.max()), 0.0)
+        self.assertEqual(float(written.min()), 0.0)
+
+    def test_unmute_restores_capture(self):
+        stream = self._make_stream()
+        stream.set_muted(True)
+        stream._audio_callback(
+            np.ones((128, 1), dtype=np.float32), 128, None, None
+        )
+        stream.set_muted(False)
+        stream._audio_callback(
+            np.ones((128, 1), dtype=np.float32) * 0.7, 128, None, None
+        )
+        self.assertEqual(float(stream._all_chunks[0].max()), 0.0)
+        self.assertAlmostEqual(float(stream._all_chunks[1].max()), 0.7)
+
+    def test_level_callback_receives_zeroed_chunk_when_muted(self):
+        received = []
+        from app.recording.audio_capture import AudioStream
+        stream = AudioStream(
+            device_index=None, sample_rate=16000, channels=1,
+            level_callback=lambda c: received.append(c),
+        )
+        stream._recording = True
+        stream._paused = False
+        stream.set_muted(True)
+        stream._audio_callback(
+            np.ones((64, 1), dtype=np.float32), 64, None, None
+        )
+        self.assertEqual(len(received), 1)
+        self.assertEqual(float(received[0].max()), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
