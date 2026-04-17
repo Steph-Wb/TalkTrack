@@ -584,7 +584,7 @@ QFrame#collapsibleHeader {
 
 /* Meters + gain panel: lighter background to set it apart */
 #metersPanel {
-    background-color: #252537;
+    background-color: #2D2D37;
     border-radius: 6px;
 }
 #metersPanel QLabel {
