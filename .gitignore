@@ -16,9 +16,10 @@ recordings/
 *.mp3
 *.mp4
 *.avi
-.claude/
+.claude/*
+!.claude/rules/
 .worktrees/
-CLAUDE.md
+CLAUDE.local.md
 docs/plans/
 nul
 temp.txt
