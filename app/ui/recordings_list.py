@@ -34,11 +34,6 @@ class RecordingsList(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header
-        title = QLabel("Recordings")
-        title.setObjectName("sectionHeader")
-        layout.addWidget(title)
-
         # Search bar
         self.search_bar = SearchBar()
         self.search_bar.search_requested.connect(self._on_search)
