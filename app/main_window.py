@@ -21,6 +21,7 @@ from app.ui.source_selector import SourceSelector
 from app.ui.transcript_viewer import TranscriptViewer
 from app.ui.notes_panel import NotesPanel
 from app.ui.recordings_list import RecordingsList
+from app.ui.collapsible_section import CollapsibleSection
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.status_panel import SystemStatusDialog
 from app.ui.recording_header import RecordingHeader
@@ -146,14 +147,30 @@ class MainWindow(QMainWindow):
         )
         left_layout.addWidget(self.waveform)
 
-        # Audio sources (collapsible) - no stretch so title sits at top when collapsed
+        # Audio sources (collapsible). Stretch is toggled dynamically below.
         self.source_selector = SourceSelector(config=self.config)
         left_layout.addWidget(self.source_selector)
 
-        # Recordings list
+        # Recordings list wrapped in a CollapsibleSection
         recordings_dir = self.config.get("output", "directory")
         self.recordings_list = RecordingsList(recordings_dir)
-        left_layout.addWidget(self.recordings_list, 1)
+        self._recordings_section = CollapsibleSection("Recordings")
+        self._recordings_section.content_layout().addWidget(self.recordings_list)
+        self._recordings_section.set_expanded(True)
+        left_layout.addWidget(self._recordings_section, 1)
+
+        # Dynamic stretch: each section claims stretch 1 only when expanded,
+        # so a collapsed section doesn't reserve empty space.
+        self.source_selector._section.toggled.connect(
+            lambda expanded: left_layout.setStretchFactor(
+                self.source_selector, 1 if expanded else 0
+            )
+        )
+        self._recordings_section.toggled.connect(
+            lambda expanded: left_layout.setStretchFactor(
+                self._recordings_section, 1 if expanded else 0
+            )
+        )
 
         splitter.addWidget(left_panel)
 

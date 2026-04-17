@@ -2,7 +2,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel,
     QPushButton, QListWidget, QListWidgetItem,
-    QRadioButton, QButtonGroup, QCheckBox, QToolButton, QFrame
+    QRadioButton, QButtonGroup, QCheckBox, QFrame
 )
 from PyQt6.QtCore import pyqtSignal, QTimer, Qt
 
@@ -11,51 +11,7 @@ from app.utils.audio_devices import (
     get_default_mic, get_default_output
 )
 from app.utils.platform_info import is_windows_11
-
-
-class CollapsibleSection(QWidget):
-    """A section with a clickable header that toggles content visibility."""
-
-    def __init__(self, title, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header button
-        self._toggle_btn = QToolButton()
-        self._toggle_btn.setObjectName("collapsibleToggle")
-        self._toggle_btn.setText(f"\u25b8  {title}")
-        self._toggle_btn.setCheckable(True)
-        self._toggle_btn.setChecked(False)
-        self._toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self._toggle_btn.toggled.connect(self._on_toggled)
-        self._toggle_btn.setStyleSheet(
-            "QToolButton { border: none; color: #89b4fa; font-weight: bold; "
-            "text-align: left; padding: 4px 0; }"
-            "QToolButton:hover { color: #b4befe; }"
-        )
-        layout.addWidget(self._toggle_btn)
-
-        # Content area
-        self._content = QWidget()
-        self._content.setVisible(False)
-        self._content_layout = QVBoxLayout(self._content)
-        self._content_layout.setContentsMargins(0, 4, 0, 0)
-        layout.addWidget(self._content, 1)
-
-        self._title = title
-
-    def content_layout(self):
-        return self._content_layout
-
-    def _on_toggled(self, checked):
-        self._content.setVisible(checked)
-        arrow = "\u25be" if checked else "\u25b8"
-        self._toggle_btn.setText(f"{arrow}  {self._title}")
-
-    def set_expanded(self, expanded):
-        self._toggle_btn.setChecked(expanded)
+from app.ui.collapsible_section import CollapsibleSection
 
 
 class SourceSelector(QWidget):
@@ -165,24 +121,29 @@ class SourceSelector(QWidget):
     def _setup_per_app_ui(self, parent_layout):
         """Per-app audio picker (Win11)."""
         self.mode_group = QButtonGroup(self)
-        self.radio_per_app = QRadioButton("Capture selected apps")
+        self.radio_per_app = QRadioButton("Selected apps")
         self.radio_per_app.setObjectName("captureMode")
-        self.radio_legacy = QRadioButton("Capture all system audio")
+        self.radio_per_app.setToolTip("Capture audio only from the apps checked below.")
+        self.radio_legacy = QRadioButton("All system audio")
         self.radio_legacy.setObjectName("captureMode")
+        self.radio_legacy.setToolTip("Capture all system audio output (WASAPI loopback).")
         self.mode_group.addButton(self.radio_per_app, 0)
         self.mode_group.addButton(self.radio_legacy, 1)
         self.radio_per_app.setChecked(True)
         self.mode_group.idToggled.connect(self._on_mode_changed)
 
-        parent_layout.addWidget(self.radio_per_app)
+        # Radios on a single row so they don't push the app list down
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        mode_row.addWidget(self.radio_per_app, 1)
+        mode_row.addWidget(self.radio_legacy, 1)
+        parent_layout.addLayout(mode_row)
 
         # App list (checkable)
         self.app_list = QListWidget()
         self.app_list.setObjectName("appAudioList")
-        self.app_list.setMinimumHeight(100)
+        self.app_list.setMinimumHeight(180)
         parent_layout.addWidget(self.app_list, 1)
-
-        parent_layout.addWidget(self.radio_legacy)
 
         # Hidden legacy combo for fallback
         self.loopback_combo = QComboBox()

@@ -216,10 +216,10 @@ QRadioButton#captureMode {
     background-color: #181825;
     border: 1px solid #313244;
     border-radius: 6px;
-    padding: 6px 12px;
+    padding: 4px 8px;
     font-weight: bold;
-    font-size: 13px;
-    spacing: 8px;
+    font-size: 12px;
+    spacing: 6px;
 }
 
 QRadioButton#captureMode:checked {
