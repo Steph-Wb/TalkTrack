@@ -39,6 +39,7 @@ class MainWindow(QMainWindow):
         self._current_session = None
         self._transcription_worker = None
         self._diarization_worker = None
+        self._mic_muted = False
 
         self.setWindowTitle("TalkTrack - Call Recorder, Transcriber & AI Summary")
         self.setMinimumSize(1000, 700)
@@ -194,6 +195,7 @@ class MainWindow(QMainWindow):
         self.recording_controls.record_clicked.connect(self._start_recording)
         self.recording_controls.pause_clicked.connect(self._toggle_pause)
         self.recording_controls.stop_clicked.connect(self._stop_recording)
+        self.recording_controls.mute_clicked.connect(self._toggle_mute)
 
         # Recorder signals
         self.recorder.state_changed.connect(self._on_state_changed)
@@ -266,6 +268,13 @@ class MainWindow(QMainWindow):
             app_pids=app_pids,
             mic_device_2=mic2,
         )
+        # Apply "start muted" setting
+        start_muted = self.config.get("audio", "mic_mute_on_start")
+        self._mic_muted = bool(start_muted)
+        if self.recorder._capture is not None:
+            self.recorder._capture.set_muted(self._mic_muted)
+        self.recording_controls.set_muted(self._mic_muted)
+        self.waveform.set_mic_muted(self._mic_muted)
         self.notes_panel.set_recording_start(datetime.now())
         self.chat_panel.clear_chat()
         self.status_label.setText("Recording...")
@@ -277,6 +286,17 @@ class MainWindow(QMainWindow):
         elif self.recorder.state == RecordingState.PAUSED:
             self.recorder.resume_recording()
             self.status_label.setText("Recording...")
+
+    def _toggle_mute(self):
+        """Toggle mic mute state mid-recording."""
+        if self.recorder.state not in (RecordingState.RECORDING, RecordingState.PAUSED):
+            return
+        self._mic_muted = not self._mic_muted
+        if self.recorder._capture is not None:
+            self.recorder._capture.set_muted(self._mic_muted)
+        self.recording_controls.set_muted(self._mic_muted)
+        self.waveform.set_mic_muted(self._mic_muted)
+        self.status_label.setText("Microphone muted" if self._mic_muted else "Recording...")
 
     def _stop_recording(self):
         self.recorder.stop_recording()
@@ -332,6 +352,8 @@ class MainWindow(QMainWindow):
             self.waveform.stop()
             self.recording_controls.reset_timer()
             self.recording_controls.reset_levels()
+            self._mic_muted = False
+            self.waveform.set_mic_muted(False)
 
     def _on_recording_finished(self, session):
         self._current_session = session
