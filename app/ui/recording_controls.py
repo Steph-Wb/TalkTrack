@@ -11,7 +11,7 @@ from app.ui.level_meter import LevelBar, compute_rms_db, db_to_fraction
 class RecordingControls(QWidget):
     """Recording control buttons, timer, and level meters — compact two-row layout.
 
-    Row 1: [● Rec] [⏸ Pause] [■ Stop]
+    Row 1: [● Rec] [⏸ Pause] [■ Stop] [🎤 Mute]
     Row 2: ● 00:12:34  Mic ▓▓▓▓  Sys ▓▓▓▓
     """
 
