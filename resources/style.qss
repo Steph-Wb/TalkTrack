@@ -558,3 +558,20 @@ QToolTip {
 #wizardSaveBtn:hover {
     background-color: #b4d0fb;
 }
+
+/* Slightly smaller fonts in the left control pane to fit more on screen */
+#leftPanel,
+#leftPanel QLabel,
+#leftPanel QRadioButton,
+#leftPanel QCheckBox,
+#leftPanel QPushButton,
+#leftPanel QListWidget,
+#leftPanel QComboBox,
+#leftPanel QToolButton {
+    font-size: 9pt;
+}
+
+/* Keep the timer large and readable */
+#leftPanel #timerLabel {
+    font-size: 13pt;
+}

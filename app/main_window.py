@@ -127,6 +127,7 @@ class MainWindow(QMainWindow):
 
         # Left panel: controls at top, sources collapsible, recordings below
         left_panel = QWidget()
+        left_panel.setObjectName("leftPanel")
         left_panel.setFixedWidth(400)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(8, 8, 8, 8)

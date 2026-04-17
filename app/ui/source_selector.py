@@ -85,19 +85,20 @@ class SourceSelector(QWidget):
         else:
             self._setup_legacy_ui(content)
 
-        # Bottom row: auto-refresh + refresh devices
-        bottom_row = QHBoxLayout()
+        # Auto-refresh + Refresh Devices live in the section header so they
+        # don't eat vertical space from the app list.
         if self._win11:
             self.auto_refresh_check = QCheckBox("Auto-refresh")
             self.auto_refresh_check.setChecked(True)
             self.auto_refresh_check.toggled.connect(self._on_auto_refresh_toggled)
-            bottom_row.addWidget(self.auto_refresh_check)
+            self.auto_refresh_check.setStyleSheet("font-size: 11px;")
+            self._section.add_header_widget(self.auto_refresh_check)
 
-        bottom_row.addStretch()
-        self.refresh_btn = QPushButton("Refresh Devices")
+        self.refresh_btn = QPushButton("\u21bb")
+        self.refresh_btn.setToolTip("Refresh audio devices")
+        self.refresh_btn.setFixedSize(24, 22)
         self.refresh_btn.clicked.connect(self.refresh_devices)
-        bottom_row.addWidget(self.refresh_btn)
-        content.addLayout(bottom_row)
+        self._section.add_header_widget(self.refresh_btn)
 
         layout.addWidget(self._section)
 
