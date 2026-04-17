@@ -140,18 +140,20 @@ class _VerticalMeter(QWidget):
         # -60 to -18 dB: green
         painter.fillRect(0, y_18, w, h - y_18, QColor("#a6e3a1"))
 
-        # Overlay black to hide everything below current dB
+        # Overlay black over the empty region above the current level
+        # (bar fills upward from the bottom, DAW-style)
         current_y = _db_to_y(self._db, h)
-        if current_y < h:
-            painter.fillRect(0, current_y, w, h - current_y, QColor("#1e1e2e"))
+        if current_y > 0:
+            painter.fillRect(0, 0, w, current_y, QColor("#1e1e2e"))
 
-        # Peak hold line (white, 2px)
+        # Peak hold line (bright, 3px)
         peak_db = 20.0 * float(np.log10(max(self._peak_abs, 1e-10)))
         peak_db = max(peak_db, DB_FLOOR)
         peak_y = _db_to_y(peak_db, h)
         if peak_y < h and self._peak_abs > 0.001:
-            painter.setPen(QPen(QColor("#cdd6f4"), 2))
-            painter.drawLine(0, peak_y, w, peak_y)
+            painter.setPen(QPen(QColor("#f5e0dc"), 3))
+            peak_y_draw = min(peak_y, h - 2)
+            painter.drawLine(0, peak_y_draw, w, peak_y_draw)
 
         # 0 dB clip line
         painter.setPen(QPen(QColor("#f38ba8"), 1))
@@ -207,6 +209,8 @@ class MetersPanel(QWidget):
         # Meter row: scale + mic meter + clip led + sys meter + clip led
         meter_row = QHBoxLayout()
         meter_row.setSpacing(6)
+
+        meter_row.addStretch()
 
         self._scale = _DbScale()
         meter_row.addWidget(self._scale)
