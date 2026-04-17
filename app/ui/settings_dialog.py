@@ -64,6 +64,14 @@ class SettingsDialog(QDialog):
         )
         recording_form.addRow("Silence duration:", self.silence_duration_spin)
 
+        self.mic_mute_on_start_cb = QCheckBox("Start recordings with microphone muted")
+        self.mic_mute_on_start_cb.setToolTip(
+            "When checked, new recordings begin with the mic muted.\n"
+            "Toggle mute anytime during recording via the Mute button.\n"
+            "Applies to both mics when dual-mic mode is configured."
+        )
+        recording_form.addRow(self.mic_mute_on_start_cb)
+
         general_layout.addWidget(recording_group)
         general_layout.addStretch()
 
@@ -335,6 +343,7 @@ class SettingsDialog(QDialog):
         self.auto_record_cb.setChecked(self.config.get("general", "auto_record"))
         self.silence_auto_stop_cb.setChecked(self.config.get("general", "silence_auto_stop"))
         self.silence_duration_spin.setValue(self.config.get("general", "silence_duration"))
+        self.mic_mute_on_start_cb.setChecked(self.config.get("audio", "mic_mute_on_start"))
 
         # Audio
         sr = self.config.get("audio", "sample_rate")
@@ -420,6 +429,7 @@ class SettingsDialog(QDialog):
         self.config.set("general", "auto_record", self.auto_record_cb.isChecked())
         self.config.set("general", "silence_auto_stop", self.silence_auto_stop_cb.isChecked())
         self.config.set("general", "silence_duration", self.silence_duration_spin.value())
+        self.config.set("audio", "mic_mute_on_start", self.mic_mute_on_start_cb.isChecked())
 
         self.config.set("audio", "sample_rate", self.sample_rate_combo.currentData())
         self.config.set("audio", "channels", self.channels_combo.currentData())
