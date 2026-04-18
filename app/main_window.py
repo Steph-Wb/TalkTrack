@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QAction
 
 from app.utils.config import Config
+from app.recording.process_audio_capture import ProcessAudioCapture
 from app.recording.recorder import Recorder, RecordingState
 from app.transcription.transcriber import TranscriptionWorker, TranscriptResult
 from app.transcription.diarizer import DiarizationWorker, SimpleDiarizer
@@ -365,6 +366,49 @@ class MainWindow(QMainWindow):
         self.recording_controls.set_muted(self._mic_muted)
         self.waveform.set_mic_muted(self._mic_muted)
         self.status_label.setText("Microphone muted" if self._mic_muted else "Recording...")
+
+    def _start_system_monitor(self):
+        """Start a buffer-less system audio stream feeding the system meter.
+
+        In per-app mode, uses ProcessAudioCapture on the selected PIDs.
+        In legacy mode (or when no PIDs checked), uses LoopbackStream.
+        """
+        self._stop_system_monitor()
+        mode = self.source_selector.get_capture_mode()
+
+        if mode == "per_app":
+            pids = self.source_selector.get_selected_app_pids()
+            if not pids:
+                return
+            monitor = ProcessAudioCapture(
+                pids=pids,
+                sample_rate=self.config.get("audio", "sample_rate"),
+                level_callback=self.meters_panel.update_system_level,
+                enable_buffer=False,
+            )
+            status = monitor.start()
+            if status["active"] == 0:
+                logger.warning("Test per-app monitor failed: %s", status["failures"])
+                return
+            self.system_monitor = monitor
+            return
+
+        # Legacy WASAPI loopback path.
+        device = self.source_selector.get_selected_loopback()
+        if device is None:
+            return
+        try:
+            dev_info = sd.query_devices(device)
+            device_name = dev_info.get("name", "")
+            self.system_monitor = LoopbackStream(
+                device_name=device_name,
+                sample_rate=self.config.get("audio", "sample_rate"),
+                level_callback=self.meters_panel.update_system_level,
+            )
+            self.system_monitor.start()
+        except Exception as e:
+            logger.warning("Test system monitor failed: %s", e)
+            self.system_monitor = None
 
     def _on_gain_changed(self, gain):
         """Slider moved - apply live gain to capture, debounce config write."""
