@@ -44,5 +44,41 @@ class TestProcessAudioMixer(unittest.TestCase):
         self.assertFalse(stream.is_active)
 
 
+class TestConvertDtype(unittest.TestCase):
+    def test_float32_passthrough(self):
+        from app.recording.process_audio_capture import _convert_dtype
+        raw = np.array([0.5, -0.25, 0.0, 1.0], dtype=np.float32).tobytes()
+        arr = _convert_dtype(raw, format_tag="float32", bits_per_sample=32)
+        np.testing.assert_array_almost_equal(arr, [0.5, -0.25, 0.0, 1.0])
+        self.assertEqual(arr.dtype, np.float32)
+
+    def test_s16_scaled_to_float32(self):
+        from app.recording.process_audio_capture import _convert_dtype
+        raw = np.array([0, 16384, -32768, 32767], dtype=np.int16).tobytes()
+        arr = _convert_dtype(raw, format_tag="s16", bits_per_sample=16)
+        # 16384/32768 = 0.5 ; -32768/32768 = -1.0 ; 32767/32768 ≈ 0.99997
+        self.assertAlmostEqual(float(arr[0]), 0.0, places=5)
+        self.assertAlmostEqual(float(arr[1]), 0.5, places=5)
+        self.assertAlmostEqual(float(arr[2]), -1.0, places=5)
+        self.assertAlmostEqual(float(arr[3]), 0.99997, places=4)
+        self.assertEqual(arr.dtype, np.float32)
+
+    def test_s24_in_32bit_container_shifted_and_scaled(self):
+        from app.recording.process_audio_capture import _convert_dtype
+        # s24 in 32-bit container: high 24 bits hold the sample.
+        # Value 4194304 (0x400000) in the high 24 bits → 0.5 full scale.
+        raw = np.array([0, 0x400000 << 8, -0x800000 << 8], dtype=np.int32).tobytes()
+        arr = _convert_dtype(raw, format_tag="s24", bits_per_sample=32)
+        self.assertAlmostEqual(float(arr[0]), 0.0, places=5)
+        self.assertAlmostEqual(float(arr[1]), 0.5, places=5)
+        self.assertAlmostEqual(float(arr[2]), -1.0, places=5)
+        self.assertEqual(arr.dtype, np.float32)
+
+    def test_unknown_format_raises(self):
+        from app.recording.process_audio_capture import _convert_dtype
+        with self.assertRaises(ValueError):
+            _convert_dtype(b"\x00", format_tag="mu-law", bits_per_sample=8)
+
+
 if __name__ == "__main__":
     unittest.main()

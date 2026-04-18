@@ -27,6 +27,33 @@ def stereo_to_mono(data):
     return data.mean(axis=1).astype(np.float32)
 
 
+def _convert_dtype(raw_bytes, format_tag, bits_per_sample):
+    """Convert a packed byte buffer from Windows into a float32 numpy array.
+
+    Args:
+        raw_bytes: bytes from IAudioCaptureClient.GetBuffer.
+        format_tag: "float32", "s16", or "s24".
+        bits_per_sample: container width (32 for s24-in-s32, 16 for s16, 32 for float32).
+
+    Returns:
+        1D float32 numpy array (interleaved channels flattened — caller reshapes).
+
+    Raises:
+        ValueError: for unknown formats. We only support formats process-loopback
+        is documented to emit.
+    """
+    if format_tag == "float32":
+        return np.frombuffer(raw_bytes, dtype=np.float32).copy()
+    if format_tag == "s16":
+        samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32)
+        return samples / 32768.0
+    if format_tag == "s24":
+        # 24-bit samples in 32-bit containers: high 24 bits are the data.
+        samples = np.frombuffer(raw_bytes, dtype=np.int32).astype(np.float32)
+        return (samples / 256.0) / 8388608.0   # >>8 then /2^23
+    raise ValueError(f"Unsupported format_tag: {format_tag!r}")
+
+
 def mix_audio_chunks(chunks):
     """Mix multiple audio arrays by averaging, with zero-padding for length alignment.
 
