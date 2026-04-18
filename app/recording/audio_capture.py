@@ -7,6 +7,8 @@ import sounddevice as sd
 import soundfile as sf
 from pathlib import Path
 
+from app.recording.process_audio_capture import ProcessAudioCapture
+
 logger = logging.getLogger(__name__)
 
 
@@ -266,6 +268,14 @@ class DualAudioCapture:
         self._silence_fired = False  # only fire once per silence stretch
         self._muted = False
         self.mic_gain = 1.0
+        self._pid_lost_callback = None
+        self._capture_lost_callback = None
+        self._capture_status = None
+
+    def set_capture_event_callbacks(self, pid_lost=None, capture_lost=None):
+        """Register callbacks for ProcessAudioCapture events (per-app mode only)."""
+        self._pid_lost_callback = pid_lost
+        self._capture_lost_callback = capture_lost
 
     def set_level_callbacks(self, mic_callback, system_callback):
         """Set callbacks to receive audio level data from each channel."""
@@ -317,6 +327,50 @@ class DualAudioCapture:
             self.mic_device, self.loopback_device, self.capture_mode,
         )
 
+        # System audio capture. In per-app mode with PIDs, use ProcessAudioCapture.
+        # Otherwise use WASAPI loopback if a device is set.
+        # Note: system capture activates BEFORE mic capture so a total per-app
+        # failure raises before the mic stream is opened.
+        self.system_stream = None
+        self._capture_status = None
+
+        def _system_cb(chunk):
+            if self._system_level_callback is not None:
+                self._system_level_callback(chunk)
+            self._check_silence(chunk)
+
+        if self.capture_mode == "per_app" and self.app_pids:
+            self.system_stream = ProcessAudioCapture(
+                pids=self.app_pids,
+                sample_rate=self.sample_rate,
+                level_callback=_system_cb,
+                pid_lost_callback=self._pid_lost_callback,
+                capture_lost_callback=self._capture_lost_callback,
+            )
+            status = self.system_stream.start()
+            self._capture_status = status
+            if status["active"] == 0:
+                raise RuntimeError(
+                    f"Per-app capture failed for all selected apps: {status['failures']}"
+                )
+        elif self.loopback_device is not None:
+            try:
+                dev_info = sd.query_devices(self.loopback_device)
+                device_name = dev_info.get("name", "")
+                logger.info("System audio: looking for loopback of '%s'", device_name)
+
+                self.system_stream = LoopbackStream(
+                    device_name=device_name,
+                    sample_rate=self.sample_rate,
+                    level_callback=_system_cb,
+                )
+                self.system_stream.start()
+            except Exception as e:
+                logger.error("Failed to start system audio capture: %s", e)
+                self.system_stream = None
+        else:
+            logger.warning("No system audio device selected")
+
         # Microphone capture (sounddevice)
         if self.mic_device is not None:
             self.mic_stream = AudioStream(
@@ -348,31 +402,6 @@ class DualAudioCapture:
             if self.mic_gain != 1.0:
                 self.mic_stream_2.set_gain(self.mic_gain)
             logger.info("Mic stream 2 started on device %s", self.mic_device_2)
-
-        # System audio capture (PyAudioWPatch WASAPI loopback)
-        if self.loopback_device is not None:
-            try:
-                # Get device name for matching to loopback device
-                dev_info = sd.query_devices(self.loopback_device)
-                device_name = dev_info.get("name", "")
-                logger.info("System audio: looking for loopback of '%s'", device_name)
-
-                def _system_cb(chunk):
-                    if self._system_level_callback is not None:
-                        self._system_level_callback(chunk)
-                    self._check_silence(chunk)
-
-                self.system_stream = LoopbackStream(
-                    device_name=device_name,
-                    sample_rate=self.sample_rate,
-                    level_callback=_system_cb,
-                )
-                self.system_stream.start()
-            except Exception as e:
-                logger.error("Failed to start system audio capture: %s", e)
-                self.system_stream = None
-        else:
-            logger.warning("No system audio device selected")
 
         self._recording = True
         self._start_time = time.time()

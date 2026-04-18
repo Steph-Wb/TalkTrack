@@ -260,5 +260,84 @@ class TestDualAudioCaptureGain(unittest.TestCase):
         self.assertIsInstance(cap.mic_gain, float)
 
 
+import tempfile
+from unittest.mock import MagicMock, patch
+
+
+class TestDualAudioCaptureDispatch(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.output_dir = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_per_app_mode_uses_process_audio_capture(self):
+        from app.recording.audio_capture import DualAudioCapture
+
+        with patch("app.recording.audio_capture.ProcessAudioCapture") as MockPAC:
+            mock_instance = MagicMock()
+            mock_instance.start.return_value = {
+                "total": 2, "active": 2, "failures": {}
+            }
+            MockPAC.return_value = mock_instance
+
+            cap = DualAudioCapture(
+                mic_device=None, loopback_device=None,
+                sample_rate=16000, capture_mode="per_app",
+                app_pids=[123, 456],
+            )
+            cap.start(output_dir=self.output_dir)
+            MockPAC.assert_called_once()
+            mock_instance.start.assert_called_once()
+            self.assertEqual(cap._capture_status["active"], 2)
+
+    def test_legacy_mode_uses_loopback_stream(self):
+        from app.recording.audio_capture import DualAudioCapture
+
+        with patch("app.recording.audio_capture.LoopbackStream") as MockLS, \
+             patch("app.recording.audio_capture.sd.query_devices",
+                   return_value={"name": "Speakers"}):
+            mock_instance = MagicMock()
+            MockLS.return_value = mock_instance
+
+            cap = DualAudioCapture(
+                mic_device=None, loopback_device=0,
+                sample_rate=16000, capture_mode="legacy",
+            )
+            cap.start(output_dir=self.output_dir)
+            MockLS.assert_called_once()
+
+    def test_per_app_zero_active_raises(self):
+        from app.recording.audio_capture import DualAudioCapture
+
+        with patch("app.recording.audio_capture.ProcessAudioCapture") as MockPAC:
+            mock_instance = MagicMock()
+            mock_instance.start.return_value = {
+                "total": 1, "active": 0, "failures": {123: "E_ACCESSDENIED"}
+            }
+            MockPAC.return_value = mock_instance
+
+            cap = DualAudioCapture(
+                mic_device=None, loopback_device=None,
+                sample_rate=16000, capture_mode="per_app",
+                app_pids=[123],
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                cap.start(output_dir=self.output_dir)
+            self.assertIn("E_ACCESSDENIED", str(ctx.exception))
+
+    def test_per_app_empty_pids_falls_through_to_none(self):
+        from app.recording.audio_capture import DualAudioCapture
+
+        cap = DualAudioCapture(
+            mic_device=None, loopback_device=None,
+            sample_rate=16000, capture_mode="per_app",
+            app_pids=[],
+        )
+        cap.start(output_dir=self.output_dir)
+        self.assertIsNone(cap.system_stream)
+
+
 if __name__ == "__main__":
     unittest.main()
