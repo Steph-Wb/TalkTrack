@@ -5,6 +5,7 @@ via ActivateAudioInterfaceAsync with AUDIOCLIENT_ACTIVATION_PARAMS.
 This module provides a pipeline for capturing audio from specific PIDs
 and mixing the results into a single output stream.
 """
+import logging
 import threading
 import time
 from math import gcd
@@ -13,6 +14,8 @@ import soundfile as sf
 from scipy.signal import resample_poly
 
 from app.utils.platform_info import is_windows_11
+
+logger = logging.getLogger(__name__)
 
 
 def stereo_to_mono(data):
@@ -155,29 +158,6 @@ class ProcessCaptureStream:
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
-    def _capture_loop(self):
-        """Background thread: initialize COM, capture audio, clean up."""
-        try:
-            # COM initialization would happen here:
-            # comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
-            self._read_audio_packets()
-        finally:
-            # COM cleanup would happen here:
-            # comtypes.CoUninitialize()
-            pass
-
-    def _read_audio_packets(self):
-        """Placeholder for COM-based audio packet reading.
-
-        In the full implementation, this would:
-        1. Create AUDIOCLIENT_ACTIVATION_PARAMS for the target PID
-        2. Call ActivateAudioInterfaceAsync to get an IAudioClient
-        3. Initialize the client in loopback mode
-        4. Read audio packets in a loop, converting to float32
-        """
-        while self._recording:
-            time.sleep(0.01)
-
     def pause(self):
         """Pause audio capture (stops storing chunks)."""
         self._paused = True
@@ -218,87 +198,111 @@ class ProcessCaptureStream:
 
 
 class ProcessAudioCapture:
-    """Manages multiple ProcessCaptureStreams and mixes their output.
+    """Mixer for N per-process loopback streams. Owns a single polling thread.
 
-    Provides the same interface as AudioStream (start/stop/pause/resume/
-    get_audio_data/save_to_file) so it can be used as a drop-in replacement
-    for loopback capture in DualAudioCapture.
+    PIDs are fixed at construction time; add/remove during a session is
+    deliberately out of scope (see design Q3). Pause/resume drains the client
+    buffers but discards the data, matching AudioStream / LoopbackStream.
     """
 
-    def __init__(self, pids, sample_rate=16000):
+    def __init__(self, pids, sample_rate=16000, level_callback=None,
+                 enable_buffer=True, pid_lost_callback=None,
+                 capture_lost_callback=None):
         self.pids = list(pids)
         self.sample_rate = sample_rate
-        self._streams = {}
-        self._recording = False
+        self._level_callback = level_callback
+        self._pid_lost_callback = pid_lost_callback
+        self._capture_lost_callback = capture_lost_callback
+        self._enable_buffer = enable_buffer
+        self._streams = {}                     # {pid: ProcessCaptureStream}
+        self._running = False
+        self._paused = False
+        self._all_chunks = []
+        self._thread = None
+        self._active_last_tick = set()
+        self._crashed = False
+        self.capture_status = {}
 
-    def start(self):
-        """Create and start a ProcessCaptureStream for each PID."""
-        self._recording = True
-        for pid in self.pids:
-            stream = ProcessCaptureStream(
-                pid=pid, sample_rate=self.sample_rate
-            )
-            stream.start()
-            self._streams[pid] = stream
-
-    def add_pid(self, pid):
-        """Add a new PID to capture during a live recording session."""
-        if pid in self._streams:
-            return
-        stream = ProcessCaptureStream(pid=pid, sample_rate=self.sample_rate)
-        if self._recording:
-            stream.start()
-        self._streams[pid] = stream
-        if pid not in self.pids:
-            self.pids.append(pid)
-
-    def remove_pid(self, pid):
-        """Remove a PID from capture during a live recording session."""
-        if pid in self._streams:
-            self._streams[pid].stop()
-            del self._streams[pid]
-        if pid in self.pids:
-            self.pids.remove(pid)
+    def set_level_callback(self, fn):
+        self._level_callback = fn
 
     def pause(self):
-        """Pause all active capture streams."""
-        for stream in self._streams.values():
-            stream.pause()
+        self._paused = True
 
     def resume(self):
-        """Resume all capture streams."""
-        for stream in self._streams.values():
-            stream.resume()
+        self._paused = False
 
-    def stop(self):
-        """Stop all capture streams."""
-        self._recording = False
-        for stream in self._streams.values():
-            stream.stop()
+    def _mixer_loop(self):
+        try:
+            while self._running:
+                if self._paused:
+                    for s in list(self._streams.values()):
+                        if s.is_active:
+                            try:
+                                s.read_available()
+                            except Exception:
+                                logger.exception("Stream %s crashed during paused drain", s.pid)
+                                s.is_active = False
+                    time.sleep(0.010)
+                    continue
 
-    def get_audio_data(self):
-        """Collect audio from all streams and return mixed result."""
-        chunks = []
-        for stream in self._streams.values():
-            data = stream.get_audio_data()
-            if data.size > 0:
-                chunks.append(data)
-        return mix_audio_chunks(chunks)
+                per_stream_chunks = {}
+                for pid, s in list(self._streams.items()):
+                    was_active = pid in self._active_last_tick
+                    if not s.is_active:
+                        if was_active:
+                            self._active_last_tick.discard(pid)
+                            self._emit_pid_lost(pid, s.last_error)
+                        continue
+                    self._active_last_tick.add(pid)
+                    try:
+                        chunks = s.read_available()
+                        if chunks:
+                            per_stream_chunks[pid] = np.concatenate(chunks)
+                    except Exception as e:
+                        logger.exception("Stream %s crashed", pid)
+                        s.is_active = False
+                        s.last_error = f"exception: {e}"
+                        self._active_last_tick.discard(pid)
+                        self._emit_pid_lost(pid, s.last_error)
 
-    def save_to_file(self, filepath):
-        """Save mixed audio from all streams to a WAV file."""
-        data = self.get_audio_data()
-        if data.size == 0:
-            return None
-        sf.write(str(filepath), data, self.sample_rate)
-        return str(filepath)
+                if per_stream_chunks:
+                    mixed, tails = _trim_and_mix(per_stream_chunks)
+                    for pid, tail in tails.items():
+                        self._streams[pid].put_back_tail(tail)
+                    if mixed.size > 0:
+                        if self._enable_buffer:
+                            self._all_chunks.append(mixed)
+                        if self._level_callback:
+                            self._level_callback(mixed)
+
+                if self._streams and not any(s.is_active for s in self._streams.values()):
+                    self._emit_capture_lost()
+                    break
+
+                time.sleep(0.010)
+        except Exception:
+            logger.exception("Mixer loop crashed unexpectedly")
+            self._crashed = True
+
+    def _emit_pid_lost(self, pid, error):
+        if self._pid_lost_callback:
+            try:
+                self._pid_lost_callback(pid, error or "unknown")
+            except Exception:
+                logger.exception("pid_lost callback raised")
+
+    def _emit_capture_lost(self):
+        if self._capture_lost_callback:
+            try:
+                self._capture_lost_callback()
+            except Exception:
+                logger.exception("capture_lost callback raised")
 
     @property
     def is_active(self):
-        """Whether any capture stream is currently recording."""
-        return any(s.is_active for s in self._streams.values())
+        return self._running and any(s.is_active for s in self._streams.values())
 
     @property
     def active_pids(self):
-        """List of PIDs with active capture streams."""
         return [pid for pid, s in self._streams.items() if s.is_active]

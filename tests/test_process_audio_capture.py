@@ -130,5 +130,151 @@ class TestResampler(unittest.TestCase):
         self.assertEqual(len(out), 0)
 
 
+import time
+import threading
+
+
+class FakeStream:
+    """Test double for ProcessCaptureStream used by the mixer loop tests."""
+    def __init__(self, pid, queued_chunks=None, activate_result=True, error=None):
+        self.pid = pid
+        self.is_active = True
+        self.last_error = error
+        self._activate_result = activate_result
+        self._queue = list(queued_chunks or [])
+        self._post_mix_tail = np.array([], dtype=np.float32)
+        self.released = False
+        self._lock = threading.Lock()
+
+    def activate(self):
+        self.is_active = self._activate_result
+        if not self._activate_result and self.last_error is None:
+            self.last_error = "activation_failed"
+        return self._activate_result
+
+    def read_available(self):
+        with self._lock:
+            chunks = []
+            if self._post_mix_tail.size > 0:
+                chunks.append(self._post_mix_tail)
+                self._post_mix_tail = np.array([], dtype=np.float32)
+            if self._queue:
+                chunks.append(self._queue.pop(0))
+            return chunks
+
+    def put_back_tail(self, tail):
+        if tail.size > 0:
+            self._post_mix_tail = tail
+
+    def release(self):
+        self.released = True
+        self.is_active = False
+
+    def die(self, error):
+        self.is_active = False
+        self.last_error = error
+
+
+class TestProcessAudioCaptureMixer(unittest.TestCase):
+    def _wait_for(self, predicate, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.005)
+        return False
+
+    def test_mixer_emits_mixed_chunks_via_level_callback(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        received = []
+        a = FakeStream(pid=1, queued_chunks=[np.ones(160, dtype=np.float32)])
+        b = FakeStream(pid=2, queued_chunks=[np.zeros(160, dtype=np.float32)])
+        cap = ProcessAudioCapture(pids=[1, 2], sample_rate=16000,
+                                  level_callback=received.append)
+        cap._streams = {1: a, 2: b}
+        cap._running = True
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        self._wait_for(lambda: len(received) > 0)
+        cap._running = False
+        t.join(timeout=1)
+        self.assertGreater(len(received), 0)
+        np.testing.assert_array_almost_equal(received[0], np.full(160, 0.5))
+
+    def test_trim_to_shortest_hands_back_tail(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        received = []
+        a = FakeStream(pid=1, queued_chunks=[np.ones(200, dtype=np.float32)])
+        b = FakeStream(pid=2, queued_chunks=[np.zeros(100, dtype=np.float32)])
+        cap = ProcessAudioCapture(pids=[1, 2], sample_rate=16000,
+                                  level_callback=received.append)
+        cap._streams = {1: a, 2: b}
+        cap._running = True
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        self._wait_for(lambda: len(received) > 0)
+        cap._running = False
+        t.join(timeout=1)
+        # First mix must be length 100 (the shortest).
+        self.assertEqual(len(received[0]), 100)
+        # a's tail of 100 samples got handed back.
+        self.assertEqual(a._post_mix_tail.size, 100)
+
+    def test_paused_drains_but_discards(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        received = []
+        a = FakeStream(pid=1, queued_chunks=[np.ones(160, dtype=np.float32)])
+        cap = ProcessAudioCapture(pids=[1], sample_rate=16000,
+                                  level_callback=received.append)
+        cap._streams = {1: a}
+        cap._paused = True
+        cap._running = True
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        time.sleep(0.05)   # let the loop tick a few times
+        cap._running = False
+        t.join(timeout=1)
+        # No level callbacks fired while paused, but the queue was drained.
+        self.assertEqual(len(received), 0)
+        self.assertEqual(len(a._queue), 0)
+
+    def test_crash_in_stream_does_not_kill_loop(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        received = []
+
+        class CrashingStream(FakeStream):
+            def read_available(self):
+                raise RuntimeError("kaboom")
+
+        bad = CrashingStream(pid=1)
+        good = FakeStream(pid=2, queued_chunks=[np.ones(160, dtype=np.float32)])
+        cap = ProcessAudioCapture(pids=[1, 2], sample_rate=16000,
+                                  level_callback=received.append)
+        cap._streams = {1: bad, 2: good}
+        cap._running = True
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        self._wait_for(lambda: len(received) > 0)
+        cap._running = False
+        t.join(timeout=1)
+        # Good stream still produced mixed output, bad one was marked inactive.
+        self.assertFalse(bad.is_active)
+        self.assertGreater(len(received), 0)
+
+    def test_buffer_disabled_skips_all_chunks_append(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        a = FakeStream(pid=1, queued_chunks=[np.ones(160, dtype=np.float32)])
+        cap = ProcessAudioCapture(pids=[1], sample_rate=16000,
+                                  level_callback=None, enable_buffer=False)
+        cap._streams = {1: a}
+        cap._running = True
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        self._wait_for(lambda: len(a._queue) == 0)
+        cap._running = False
+        t.join(timeout=1)
+        self.assertEqual(len(cap._all_chunks), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
