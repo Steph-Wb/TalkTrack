@@ -181,18 +181,15 @@ class MainWindow(QMainWindow):
         self._recordings_section.set_expanded(True)
         left_layout.addWidget(self._recordings_section, 1)
 
-        # Dynamic stretch: each section claims stretch 1 only when expanded,
-        # so a collapsed section doesn't reserve empty space.
-        self.source_selector._section.toggled.connect(
-            lambda expanded: left_layout.setStretchFactor(
-                self.source_selector, 1 if expanded else 0
-            )
-        )
-        self._recordings_section.toggled.connect(
-            lambda expanded: left_layout.setStretchFactor(
-                self._recordings_section, 1 if expanded else 0
-            )
-        )
+        # Trailing spacer absorbs space only when both sections are collapsed —
+        # otherwise the expanded section claims its stretch factor uncontested.
+        left_layout.addStretch(0)
+        self._left_layout = left_layout
+        self._left_spacer_index = left_layout.count() - 1
+
+        self.source_selector._section.toggled.connect(self._update_left_panel_stretch)
+        self._recordings_section.toggled.connect(self._update_left_panel_stretch)
+        self._update_left_panel_stretch()
 
         splitter.addWidget(left_panel)
 
@@ -232,6 +229,19 @@ class MainWindow(QMainWindow):
 
         splitter.setSizes([400, 860])
         main_layout.addWidget(splitter)
+
+    def _update_left_panel_stretch(self, *_):
+        audio_expanded = self.source_selector._section.is_expanded()
+        rec_expanded = self._recordings_section.is_expanded()
+        self._left_layout.setStretchFactor(
+            self.source_selector, 1 if audio_expanded else 0
+        )
+        self._left_layout.setStretchFactor(
+            self._recordings_section, 1 if rec_expanded else 0
+        )
+        self._left_layout.setStretch(
+            self._left_spacer_index, 0 if (audio_expanded or rec_expanded) else 1
+        )
 
     def _setup_statusbar(self):
         self.statusbar = QStatusBar()
