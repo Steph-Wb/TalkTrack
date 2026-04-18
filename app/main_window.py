@@ -24,6 +24,7 @@ from app.ui.recordings_list import RecordingsList
 from app.ui.collapsible_section import CollapsibleSection
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.status_panel import SystemStatusDialog
+from app.ui.tray_icon import TrayIcon
 from app.ui.recording_header import RecordingHeader
 from app.ui.waveform_display import WaveformDisplay
 from app.ui.about_dialog import AboutDialog, BMAC_URL
@@ -55,6 +56,25 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_statusbar()
         self._connect_signals()
+
+        self._really_quit = False
+        self._success_pending = False
+        self._error_pending = False
+
+        self.tray = TrayIcon(self)
+        if self.tray.is_supported():
+            self.tray.show()
+            self.tray.show_requested.connect(self._restore_from_tray)
+            self.tray.record_requested.connect(self._start_recording)
+            self.tray.pause_requested.connect(self._toggle_pause)
+            self.tray.resume_requested.connect(self._toggle_pause)
+            self.tray.stop_requested.connect(self._stop_recording)
+            self.tray.quit_requested.connect(self._quit_from_tray)
+        else:
+            import logging
+            logging.getLogger("talktrack").warning(
+                "System tray not available; minimize-to-tray is disabled."
+            )
 
         QTimer.singleShot(500, self._check_startup_status)
 
@@ -749,6 +769,17 @@ class MainWindow(QMainWindow):
     def _on_error(self, error_msg):
         self.status_label.setText(f"Error: {error_msg}")
         QMessageBox.critical(self, "Error", error_msg)
+
+    def _restore_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self._success_pending = False
+        self._error_pending = False
+        self.tray.set_overlay(None)
+
+    def _quit_from_tray(self):
+        self.close()
 
     def _open_settings(self):
         dialog = SettingsDialog(self.config, self)
