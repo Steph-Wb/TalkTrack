@@ -38,3 +38,9 @@ Catppuccin Mocha throughout. Common shades:
 - Green (healthy): `#a6e3a1`
 - Yellow (hot): `#f9e2af`
 - Rosewater (peak line): `#f5e0dc`
+
+## System tray (MainWindow)
+
+- **Popup suppression while hidden**: any background-triggered `QMessageBox` in `main_window.py` must be guarded with `if self._is_hidden_to_tray()` — show the red/green tray overlay via `_flag_error_notification()` / `_flag_success_notification()` instead of popping a modal the user can't see. Applies to worker-completion / error callbacks. User-initiated popups (menu actions, delete prompts) don't need the guard since the window is visible.
+- **`_really_quit` flag + `_confirm_exit`**: the X button and tray Quit both funnel through `closeEvent`. `_confirm_exit()` shows the exit dialog with a recording-aware body; setting `_really_quit = True` bypasses the dialog for reentrant calls. Don't add new direct-quit paths without going through this.
+- **`changeEvent` hijacks minimize**: when `general.minimize_to_tray` is enabled, `changeEvent` intercepts `WindowMinimized`, resets state to `WindowNoState`, and calls `hide()` — so restored windows come back normal-size, not maximized. Intentional. If you add window-state handling elsewhere, coordinate with this path.
