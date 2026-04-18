@@ -3,32 +3,7 @@ import unittest
 import numpy as np
 
 
-class TestProcessAudioMixer(unittest.TestCase):
-
-    def test_mix_single_stream(self):
-        from app.recording.process_audio_capture import mix_audio_chunks
-        chunk = np.array([0.5, -0.5, 0.3], dtype=np.float32)
-        result = mix_audio_chunks([chunk])
-        np.testing.assert_array_almost_equal(result, chunk)
-
-    def test_mix_two_streams_averages(self):
-        from app.recording.process_audio_capture import mix_audio_chunks
-        a = np.array([1.0, 0.0], dtype=np.float32)
-        b = np.array([0.0, 1.0], dtype=np.float32)
-        result = mix_audio_chunks([a, b])
-        np.testing.assert_array_almost_equal(result, [0.5, 0.5])
-
-    def test_mix_empty_returns_empty(self):
-        from app.recording.process_audio_capture import mix_audio_chunks
-        result = mix_audio_chunks([])
-        self.assertEqual(len(result), 0)
-
-    def test_mix_different_lengths_pads_shorter(self):
-        from app.recording.process_audio_capture import mix_audio_chunks
-        a = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-        b = np.array([1.0], dtype=np.float32)
-        result = mix_audio_chunks([a, b])
-        self.assertEqual(len(result), 3)
+class TestMiscHelpers(unittest.TestCase):
 
     def test_stereo_to_mono_downmix(self):
         from app.recording.process_audio_capture import stereo_to_mono
@@ -42,6 +17,42 @@ class TestProcessAudioMixer(unittest.TestCase):
         self.assertEqual(stream.pid, 12345)
         self.assertEqual(stream.sample_rate, 16000)
         self.assertFalse(stream.is_active)
+
+
+class TestTrimAndMix(unittest.TestCase):
+    def test_trim_to_shortest_and_mean_mix(self):
+        from app.recording.process_audio_capture import _trim_and_mix
+        chunks = {
+            1: np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            2: np.array([0.0, 0.0], dtype=np.float32),
+        }
+        mixed, tails = _trim_and_mix(chunks)
+        np.testing.assert_array_almost_equal(mixed, [0.5, 0.5])
+        self.assertEqual(len(tails), 2)
+        np.testing.assert_array_almost_equal(tails[1], [1.0])
+        np.testing.assert_array_almost_equal(tails[2], [])
+
+    def test_all_equal_length_no_tails(self):
+        from app.recording.process_audio_capture import _trim_and_mix
+        a = np.array([1.0, 1.0], dtype=np.float32)
+        b = np.array([0.0, 0.0], dtype=np.float32)
+        mixed, tails = _trim_and_mix({1: a, 2: b})
+        np.testing.assert_array_almost_equal(mixed, [0.5, 0.5])
+        self.assertEqual(tails[1].size, 0)
+        self.assertEqual(tails[2].size, 0)
+
+    def test_single_stream(self):
+        from app.recording.process_audio_capture import _trim_and_mix
+        c = np.array([0.3, -0.3, 0.0], dtype=np.float32)
+        mixed, tails = _trim_and_mix({7: c})
+        np.testing.assert_array_almost_equal(mixed, c)
+        self.assertEqual(tails[7].size, 0)
+
+    def test_empty_input_returns_empty(self):
+        from app.recording.process_audio_capture import _trim_and_mix
+        mixed, tails = _trim_and_mix({})
+        self.assertEqual(mixed.size, 0)
+        self.assertEqual(tails, {})
 
 
 class TestConvertDtype(unittest.TestCase):

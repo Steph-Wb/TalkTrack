@@ -29,6 +29,35 @@ def stereo_to_mono(data):
     return data.mean(axis=1).astype(np.float32)
 
 
+def _trim_and_mix(per_stream_chunks):
+    """Trim every stream's chunk to the shortest length, mix with equal-weight mean,
+    return (mixed_chunk, tails_per_stream).
+
+    Args:
+        per_stream_chunks: {pid: np.ndarray(float32)}.
+
+    Returns:
+        (mixed: np.ndarray, tails: {pid: np.ndarray}) — tails may be empty arrays
+        when a stream happened to produce exactly the minimum length this tick.
+    """
+    if not per_stream_chunks:
+        return np.array([], dtype=np.float32), {}
+
+    lengths = {pid: len(c) for pid, c in per_stream_chunks.items()}
+    min_len = min(lengths.values())
+
+    aligned = []
+    tails = {}
+    for pid, c in per_stream_chunks.items():
+        aligned.append(c[:min_len])
+        tails[pid] = c[min_len:] if len(c) > min_len else np.array([], dtype=np.float32)
+
+    if min_len == 0:
+        return np.array([], dtype=np.float32), tails
+    mixed = np.mean(np.stack(aligned, axis=0), axis=0).astype(np.float32)
+    return mixed, tails
+
+
 def _convert_dtype(raw_bytes, format_tag, bits_per_sample):
     """Convert a packed byte buffer from Windows into a float32 numpy array.
 
@@ -93,37 +122,6 @@ class _Resampler:
         chunk = combined[:usable]
         self._buf = combined[usable:]
         return resample_poly(chunk, self._up, self._down).astype(np.float32)
-
-
-def mix_audio_chunks(chunks):
-    """Mix multiple audio arrays by averaging, with zero-padding for length alignment.
-
-    Args:
-        chunks: list of 1D numpy float32 arrays
-
-    Returns:
-        numpy array with mixed audio, or empty array if no chunks
-    """
-    if not chunks:
-        return np.array([], dtype=np.float32)
-
-    if len(chunks) == 1:
-        return chunks[0].copy()
-
-    # Find the maximum length across all chunks
-    max_len = max(len(c) for c in chunks)
-
-    # Pad shorter chunks with zeros to match the longest
-    padded = []
-    for chunk in chunks:
-        if len(chunk) < max_len:
-            padded.append(np.pad(chunk, (0, max_len - len(chunk))).astype(np.float32))
-        else:
-            padded.append(chunk.astype(np.float32))
-
-    # Average all chunks
-    stacked = np.stack(padded, axis=0)
-    return stacked.mean(axis=0).astype(np.float32)
 
 
 class ProcessCaptureStream:
