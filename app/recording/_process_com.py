@@ -126,3 +126,158 @@ def make_format_ieee_float(sample_rate=48000, channels=2, bits=32):
     fmt.nAvgBytesPerSec = sample_rate * fmt.nBlockAlign
     fmt.cbSize = 0
     return fmt
+
+
+import comtypes
+from comtypes import GUID, COMMETHOD, IUnknown
+from ctypes import POINTER, byref, c_void_p, c_int32, c_uint32, c_uint64, c_wchar_p
+
+
+# IActivateAudioInterfaceCompletionHandler
+IID_IActivateAudioInterfaceCompletionHandler = GUID(
+    "{41D949AB-9862-444A-80F6-C261334DA5EB}"
+)
+
+# IActivateAudioInterfaceAsyncOperation
+IID_IActivateAudioInterfaceAsyncOperation = GUID(
+    "{72A22D78-CDE4-431D-B8CC-843A71199B6D}"
+)
+
+# IAudioClient (standard WASAPI IID).
+IID_IAudioClient = GUID("{1CB9AD4C-DBFA-4C32-B178-C2F568A703B2}")
+
+# IAudioCaptureClient.
+IID_IAudioCaptureClient = GUID("{C8ADBD64-E71E-48A0-A4DE-185C395CD317}")
+
+
+class IActivateAudioInterfaceCompletionHandler(IUnknown):
+    _iid_ = IID_IActivateAudioInterfaceCompletionHandler
+    _methods_ = [
+        COMMETHOD(
+            [], comtypes.HRESULT, "ActivateCompleted",
+            (["in"], POINTER(IUnknown), "activateOperation"),
+        ),
+    ]
+
+
+class IActivateAudioInterfaceAsyncOperation(IUnknown):
+    _iid_ = IID_IActivateAudioInterfaceAsyncOperation
+    _methods_ = [
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetActivateResult",
+            (["out"], POINTER(comtypes.HRESULT), "activateResult"),
+            (["out"], POINTER(POINTER(IUnknown)), "activatedInterface"),
+        ),
+    ]
+
+
+class _CompletionHandler(comtypes.COMObject):
+    """Python COM object that signals a Win32 event when activation completes."""
+    _com_interfaces_ = [IActivateAudioInterfaceCompletionHandler]
+
+    def __init__(self, event_handle):
+        super().__init__()
+        self._event = event_handle
+
+    def ActivateCompleted(self, this, activate_operation):
+        ctypes.windll.kernel32.SetEvent(self._event)
+        return 0   # S_OK
+
+
+def activate_process_loopback(pid, timeout_ms=5000):
+    """Synchronously activate an IAudioClient for per-process loopback.
+
+    Returns (audio_client: IUnknown-pointer, hresult: int).
+    On success, hresult == S_OK (0) and audio_client is non-null.
+    On failure, audio_client is None and hresult is the error code.
+    """
+    # Ensure MTA init on this thread.
+    ctypes.windll.ole32.CoInitializeEx(None, 0x0)  # COINIT_MULTITHREADED
+
+    # Build params.
+    params = AUDIOCLIENT_ACTIVATION_PARAMS()
+    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
+    params.ProcessLoopbackParams.TargetProcessId = pid
+    params.ProcessLoopbackParams.ProcessLoopbackMode = (
+        PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+    )
+
+    # Wrap as PROPVARIANT(VT_BLOB). The BLOB holds (cbSize, pBlobData).
+    # comtypes doesn't expose PROPVARIANT blob construction; build via ctypes.
+    class _BLOB(ctypes.Structure):
+        _fields_ = [("cbSize", c_uint32), ("pBlobData", c_void_p)]
+
+    class _PROPVARIANT(ctypes.Structure):
+        _fields_ = [
+            ("vt", ctypes.c_ushort),
+            ("wReserved1", ctypes.c_ushort),
+            ("wReserved2", ctypes.c_ushort),
+            ("wReserved3", ctypes.c_ushort),
+            ("blob", _BLOB),
+            # Pad to full size (16 bytes on 32-bit, 24 on 64-bit).
+            ("_pad", ctypes.c_ubyte * 8),
+        ]
+
+    pv = _PROPVARIANT()
+    pv.vt = 0x41   # VT_BLOB
+    pv.blob.cbSize = ctypes.sizeof(params)
+    pv.blob.pBlobData = ctypes.cast(ctypes.pointer(params), c_void_p)
+
+    # Create a manual-reset event for the handler to signal.
+    event_handle = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
+    if not event_handle:
+        return None, -1
+
+    handler = _CompletionHandler(event_handle)
+
+    # Call ActivateAudioInterfaceAsync. Use WinDLL (not OleDLL) so we get the
+    # raw HRESULT back rather than an auto-raise — we want to translate failures
+    # into last_error strings, not exceptions.
+    mmdev = ctypes.WinDLL("Mmdevapi.dll")
+    ActivateAudioInterfaceAsync = mmdev.ActivateAudioInterfaceAsync
+    ActivateAudioInterfaceAsync.restype = ctypes.c_long
+    ActivateAudioInterfaceAsync.argtypes = [
+        c_wchar_p, POINTER(GUID), c_void_p,
+        POINTER(IActivateAudioInterfaceCompletionHandler),
+        POINTER(POINTER(IActivateAudioInterfaceAsyncOperation)),
+    ]
+    operation = POINTER(IActivateAudioInterfaceAsyncOperation)()
+    hr = ActivateAudioInterfaceAsync(
+        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        byref(IID_IAudioClient),
+        ctypes.cast(ctypes.pointer(pv), c_void_p),
+        handler,
+        byref(operation),
+    )
+    if hr != 0:
+        ctypes.windll.kernel32.CloseHandle(event_handle)
+        return None, hr
+
+    # Block until the completion handler fires.
+    wait_result = ctypes.windll.kernel32.WaitForSingleObject(event_handle, timeout_ms)
+    ctypes.windll.kernel32.CloseHandle(event_handle)
+    if wait_result != 0:
+        return None, -2   # WAIT_TIMEOUT or WAIT_ABANDONED
+
+    # Pull the activated interface. comtypes returns [out] params as a tuple.
+    activate_hr, activated = operation.GetActivateResult()
+    if activate_hr != 0:
+        return None, activate_hr & 0xFFFFFFFF
+    return activated, 0
+
+
+def read_next_packet(capture_client):
+    """Drain the next available packet from an IAudioCaptureClient.
+
+    Returns (data: bytes or None, frames: int, flags: int, hr: int).
+    data is None when no packet is ready OR when AUDCLNT_E_DEVICE_INVALIDATED.
+    Caller distinguishes by checking hr.
+    """
+    # Stub body — full implementation uses GetNextPacketSize + GetBuffer +
+    # ctypes.string_at + ReleaseBuffer. Fully typed via comtypes IAudioCaptureClient.
+    # See design doc Section "COM Integration / read_available() inner loop".
+    raise NotImplementedError(
+        "read_next_packet must be implemented against IAudioCaptureClient; "
+        "see Section 2 of the design doc. For now, ProcessCaptureStream can "
+        "inject a fake for tests."
+    )
