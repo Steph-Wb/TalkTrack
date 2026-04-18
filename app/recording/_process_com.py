@@ -6,6 +6,7 @@ separate file because mocking these is a high-effort/low-signal rabbit hole
 - downstream code injects fakes for the activate/read functions when testing.
 """
 
+import logging
 import ctypes
 from ctypes import (
     POINTER, byref, c_void_p, c_int32, c_uint32, c_uint64, c_wchar_p,
@@ -15,6 +16,8 @@ from ctypes import wintypes
 
 import comtypes
 from comtypes import GUID, COMMETHOD, IUnknown
+
+logger = logging.getLogger(__name__)
 
 
 # --- HRESULT codes from Audioclient.h / winerror.h ---
@@ -347,9 +350,10 @@ def activate_process_loopback(pid, timeout_ms=5000):
     """
     # MTA init. CoInitializeEx returns S_OK on first call, S_FALSE if already
     # initialized in the same mode, or RPC_E_CHANGED_MODE if the thread is STA.
-    # RPC_E_CHANGED_MODE is fatal for ActivateAudioInterfaceAsync — surface it.
     hr_init = ctypes.windll.ole32.CoInitializeEx(None, COINIT_MULTITHREADED)
     hr_init_u32 = hr_init & 0xFFFFFFFF
+    logger.info("[PID %s] CoInitializeEx(MTA) -> %s (0x%08X)",
+                pid, hresult_name(hr_init_u32), hr_init_u32)
     if hr_init_u32 == RPC_E_CHANGED_MODE:
         return None, RPC_E_CHANGED_MODE
 
@@ -373,9 +377,25 @@ def activate_process_loopback(pid, timeout_ms=5000):
     # Manual-reset event for the handler to signal.
     event_handle = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
     if not event_handle:
-        return None, 0x80004005   # E_FAIL; CreateEventW failure is exceptional.
+        logger.warning("[PID %s] CreateEventW failed", pid)
+        return None, 0x80004005
 
-    handler = _CompletionHandler(event_handle)
+    handler_obj = _CompletionHandler(event_handle)
+
+    # Explicit QueryInterface so we pass a proper COM pointer to the C
+    # function, not a Python COMObject. ctypes' implicit coercion of
+    # COMObject -> POINTER(Interface) is unreliable across comtypes versions,
+    # and an invalid handler pointer is exactly the kind of thing that
+    # produces E_ILLEGAL_METHOD_CALL (0x8000000E) synchronously.
+    try:
+        handler_ptr = handler_obj.QueryInterface(
+            IActivateAudioInterfaceCompletionHandler,
+        )
+    except comtypes.COMError as ce:
+        ctypes.windll.kernel32.CloseHandle(event_handle)
+        logger.warning("[PID %s] QueryInterface on handler failed: 0x%08X",
+                       pid, ce.hresult & 0xFFFFFFFF)
+        return None, ce.hresult & 0xFFFFFFFF
 
     try:
         # Call ActivateAudioInterfaceAsync via WinDLL (not OleDLL) so we see
@@ -389,88 +409,96 @@ def activate_process_loopback(pid, timeout_ms=5000):
             POINTER(POINTER(IActivateAudioInterfaceAsyncOperation)),
         ]
         operation = POINTER(IActivateAudioInterfaceAsyncOperation)()
+        logger.info("[PID %s] Calling ActivateAudioInterfaceAsync (device=%r, params size=%d)",
+                    pid, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+                    ctypes.sizeof(params))
         hr = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             byref(IID_IAudioClient),
             ctypes.cast(ctypes.pointer(pv), c_void_p),
-            handler,
+            handler_ptr,
             byref(operation),
         )
+        hr_u32 = hr & 0xFFFFFFFF
+        logger.info("[PID %s] ActivateAudioInterfaceAsync -> %s (0x%08X)",
+                    pid, hresult_name(hr_u32), hr_u32)
         if hr != 0:
-            return None, hr & 0xFFFFFFFF
+            return None, hr_u32
 
         # Wait for the completion handler to SetEvent.
         wait_result = ctypes.windll.kernel32.WaitForSingleObject(
             event_handle, timeout_ms,
         )
+        logger.info("[PID %s] WaitForSingleObject -> 0x%08X", pid, wait_result)
         if wait_result != 0:
-            # WAIT_TIMEOUT=0x102, WAIT_ABANDONED=0x80, WAIT_FAILED=0xFFFFFFFF.
-            return None, 0x80004005   # E_FAIL — couldn't complete activation.
+            return None, 0x80004005
 
-        # Pull the activated interface. comtypes returns [out] params as a tuple.
         activate_hr, activated = operation.GetActivateResult()
+        activate_hr_u32 = activate_hr & 0xFFFFFFFF if activate_hr else 0
+        logger.info("[PID %s] GetActivateResult -> %s (0x%08X), activated=%r",
+                    pid, hresult_name(activate_hr_u32), activate_hr_u32,
+                    bool(activated))
         if activate_hr != 0 or not activated:
-            return None, (activate_hr & 0xFFFFFFFF) if activate_hr else 0x80004003
+            return None, activate_hr_u32 if activate_hr else 0x80004003
 
-        # QueryInterface to IAudioClient — activated is POINTER(IUnknown).
         try:
             audio_client = activated.QueryInterface(IAudioClient)
         except comtypes.COMError as ce:
+            logger.warning("[PID %s] QueryInterface(IAudioClient) failed: 0x%08X",
+                           pid, ce.hresult & 0xFFFFFFFF)
             return None, ce.hresult & 0xFFFFFFFF
 
-        # Initialize in loopback mode. Process-loopback always ignores the
-        # requested format and operates at the system mix format (typically
-        # 48 kHz stereo float32). We pass a best-guess format anyway because
-        # the API documents it as required.
         requested_format = make_format_ieee_float(48000, 2, 32)
         try:
             audio_client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 AUDCLNT_STREAMFLAGS_LOOPBACK,
-                2_000_000,   # 200 ms buffer (units of 100 ns)
+                2_000_000,
                 0,
                 byref(requested_format),
                 None,
             )
         except comtypes.COMError as ce:
+            logger.warning("[PID %s] Initialize failed: 0x%08X",
+                           pid, ce.hresult & 0xFFFFFFFF)
             return None, ce.hresult & 0xFFFFFFFF
 
-        # Query negotiated format via GetMixFormat so we resample from the
-        # true rate, not from what we hoped for.
         try:
             mix_format_ptr = audio_client.GetMixFormat()
-        except comtypes.COMError as ce:
-            # Fall back to the requested format if GetMixFormat fails.
+        except comtypes.COMError:
             native_rate, native_channels, native_format, native_frame_bytes = (
                 _format_info_from_waveformatex(requested_format)
             )
         else:
-            # mix_format_ptr is POINTER(WAVEFORMATEX). Dereference once.
             try:
                 native_rate, native_channels, native_format, native_frame_bytes = (
                     _format_info_from_waveformatex(mix_format_ptr.contents)
                 )
             finally:
-                # GetMixFormat allocates via CoTaskMemAlloc — free it.
                 ctypes.windll.ole32.CoTaskMemFree(mix_format_ptr)
+        logger.info("[PID %s] negotiated format: %d Hz x %d ch (%s), frame_bytes=%d",
+                    pid, native_rate, native_channels, native_format,
+                    native_frame_bytes)
 
-        # Get IAudioCaptureClient via GetService.
         try:
             capture_client_void = audio_client.GetService(byref(IID_IAudioCaptureClient))
         except comtypes.COMError as ce:
+            logger.warning("[PID %s] GetService(IAudioCaptureClient) failed: 0x%08X",
+                           pid, ce.hresult & 0xFFFFFFFF)
             return None, ce.hresult & 0xFFFFFFFF
 
-        # capture_client_void is a c_void_p. Wrap as IAudioCaptureClient.
         capture_client = ctypes.cast(
             capture_client_void, POINTER(IAudioCaptureClient),
         )
 
-        # Start the stream.
         try:
             audio_client.Start()
         except comtypes.COMError as ce:
+            logger.warning("[PID %s] Start failed: 0x%08X",
+                           pid, ce.hresult & 0xFFFFFFFF)
             return None, ce.hresult & 0xFFFFFFFF
 
+        logger.info("[PID %s] activation complete", pid)
         context = _ActivatedContext(
             audio_client=audio_client,
             capture_client=capture_client,
