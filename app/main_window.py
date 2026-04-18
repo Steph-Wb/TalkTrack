@@ -249,6 +249,7 @@ class MainWindow(QMainWindow):
         # Recorder signals
         self.recorder.state_changed.connect(self._on_state_changed)
         self.recorder.time_updated.connect(self.recording_controls.update_time)
+        self.recorder.time_updated.connect(self._on_recording_tick)
         self.recorder.recording_finished.connect(self._on_recording_finished)
         self.recorder.recording_discarded.connect(self._on_recording_discarded)
         self.recorder.error_occurred.connect(self._on_error)
@@ -407,6 +408,8 @@ class MainWindow(QMainWindow):
     def _on_state_changed(self, state):
         self.recording_controls.set_state(state)
         self.source_selector.set_enabled(state == RecordingState.IDLE)
+        if hasattr(self, "tray") and self.tray.is_supported():
+            self.tray.set_state(state, int(self.recorder.get_elapsed_time()))
 
         if state == RecordingState.RECORDING:
             self.source_selector.set_recording_active(True)
@@ -423,6 +426,10 @@ class MainWindow(QMainWindow):
             self.meters_panel.reset()
             self._mic_muted = False
             self.waveform.set_mic_muted(False)
+
+    def _on_recording_tick(self, seconds):
+        if hasattr(self, "tray") and self.tray.is_supported():
+            self.tray.set_state(self.recorder.state, int(seconds))
 
     def _on_recording_finished(self, session):
         self._current_session = session
