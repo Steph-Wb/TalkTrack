@@ -445,5 +445,66 @@ class TestProcessCaptureStreamActivate(unittest.TestCase):
         s.release()   # no raise
 
 
+class TestProcessCaptureStreamRead(unittest.TestCase):
+    def _make_stream_with_packets(self, packets, format_tag="float32",
+                                  bits=32, native_rate=48000, native_channels=2):
+        """Build a ProcessCaptureStream with a fake packet source."""
+        from app.recording.process_audio_capture import ProcessCaptureStream
+
+        def fake_activate(pid, timeout_ms=5000):
+            client = type("C", (), {})()
+            client.native_rate = native_rate
+            client.native_channels = native_channels
+            client.native_format = format_tag
+            return client, 0
+
+        s = ProcessCaptureStream(pid=1, sample_rate=16000, activator=fake_activate)
+        s.activate()
+        # Inject a packet source used by read_available when reading real COM
+        # isn't available.
+        s._packet_source = iter(packets)
+        return s
+
+    def test_read_available_returns_empty_when_no_packets(self):
+        s = self._make_stream_with_packets([])
+        out = s.read_available()
+        self.assertEqual(out, [])
+
+    def test_read_available_converts_and_downmixes_and_resamples(self):
+        # Single packet: 480 frames, 2ch, float32 at 48kHz → 160 frames mono 16kHz.
+        stereo = np.ones(480 * 2, dtype=np.float32)
+        pkt = {"raw": stereo.tobytes(), "frames": 480, "flags": 0}
+        s = self._make_stream_with_packets([pkt])
+        out = s.read_available()
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].dtype, np.float32)
+        self.assertEqual(len(out[0]), 160)
+
+    def test_read_available_silent_flag_fast_path(self):
+        pkt = {"raw": b"\x00" * 480 * 2 * 4, "frames": 480, "flags": 0x2}
+        s = self._make_stream_with_packets([pkt])
+        out = s.read_available()
+        self.assertEqual(len(out), 1)
+        self.assertTrue(np.all(out[0] == 0.0))
+        self.assertEqual(len(out[0]), 160)
+
+    def test_read_available_prepends_post_mix_tail(self):
+        s = self._make_stream_with_packets([])
+        s._post_mix_tail = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        out = s.read_available()
+        self.assertEqual(len(out), 1)
+        np.testing.assert_array_almost_equal(out[0], [0.1, 0.2, 0.3])
+        # Tail must be consumed.
+        self.assertEqual(s._post_mix_tail.size, 0)
+
+    def test_read_available_device_invalidated_marks_inactive(self):
+        # Sentinel packet with hr=AUDCLNT_E_DEVICE_INVALIDATED.
+        pkt = {"raw": None, "frames": 0, "flags": 0, "hr": 0x88890004}
+        s = self._make_stream_with_packets([pkt])
+        out = s.read_available()
+        self.assertFalse(s.is_active)
+        self.assertEqual(s.last_error, "AUDCLNT_E_DEVICE_INVALIDATED")
+
+
 if __name__ == "__main__":
     unittest.main()

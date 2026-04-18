@@ -187,6 +187,94 @@ class ProcessCaptureStream:
             else:
                 self._post_mix_tail = tail
 
+    def read_available(self):
+        """Drain all ready packets from the capture client. Non-blocking.
+
+        Returns a list of 16 kHz mono float32 chunks, ready for the mixer.
+        On device invalidation, marks is_active=False and returns whatever
+        was already drained this call.
+        """
+        chunks = []
+
+        if self._post_mix_tail.size > 0:
+            chunks.append(self._post_mix_tail)
+            self._post_mix_tail = np.array([], dtype=np.float32)
+
+        if not self.is_active:
+            return chunks
+
+        # The _packet_source attribute lets tests inject packets. Real COM
+        # path fills it via an internal generator that calls _process_com.read_next_packet.
+        source = getattr(self, "_packet_source", None)
+        if source is None:
+            source = self._com_packet_iter()
+            self._packet_source = source
+
+        try:
+            while True:
+                try:
+                    pkt = next(source)
+                except StopIteration:
+                    break
+                if pkt is None:
+                    break
+                hr = pkt.get("hr", 0)
+                if hr == 0x88890004:   # AUDCLNT_E_DEVICE_INVALIDATED
+                    self.is_active = False
+                    self.last_error = hresult_name(hr)
+                    break
+                raw = pkt["raw"]
+                frames = pkt["frames"]
+                flags = pkt.get("flags", 0)
+                if raw is None or frames == 0:
+                    continue
+
+                if flags & 0x2:   # AUDCLNT_BUFFERFLAGS_SILENT
+                    # Skip dtype/downmix/resample; produce zero mono chunk at native rate.
+                    mono_native = np.zeros(frames, dtype=np.float32)
+                else:
+                    arr = _convert_dtype(
+                        raw,
+                        format_tag=self.native_format,
+                        bits_per_sample=self._bits_for_format(self.native_format),
+                    )
+                    if self.native_channels > 1:
+                        arr = arr.reshape(-1, self.native_channels).mean(axis=1)
+                    mono_native = arr.astype(np.float32)
+
+                resampled = self._resampler.push(mono_native)
+                if resampled.size > 0:
+                    chunks.append(resampled)
+        except Exception as e:
+            logger.exception("ProcessCaptureStream %s read error", self.pid)
+            self.is_active = False
+            self.last_error = f"read_exception: {e}"
+
+        return chunks
+
+    def _com_packet_iter(self):
+        """Generator that yields packets from the real capture client.
+
+        Built once per activation. Each __next__ calls _process_com.read_next_packet
+        (which is itself a thin wrapper around GetNextPacketSize / GetBuffer /
+        ReleaseBuffer). Returns None to signal "no more packets ready this tick".
+        """
+        from app.recording._process_com import read_next_packet as _rnp
+        while self.is_active and self._client is not None:
+            try:
+                data, frames, flags, hr = _rnp(self._capture_client)
+            except NotImplementedError:
+                # During the phased implementation: read shim not yet wired;
+                # real packet reading is a Tier-3 concern.
+                return
+            if data is None and hr == 0:
+                return   # no more packets right now
+            yield {"raw": data, "frames": frames, "flags": flags, "hr": hr}
+
+    @staticmethod
+    def _bits_for_format(fmt):
+        return {"float32": 32, "s16": 16, "s24": 32}.get(fmt, 32)
+
     def release(self):
         self.is_active = False
         self._client = None
@@ -194,6 +282,8 @@ class ProcessCaptureStream:
         self._resampler = None
         self._pre_resample_buf = np.array([], dtype=np.float32)
         self._post_mix_tail = np.array([], dtype=np.float32)
+        if hasattr(self, "_packet_source"):
+            self._packet_source = None
 
 
 class ProcessAudioCapture:

@@ -269,15 +269,44 @@ def activate_process_loopback(pid, timeout_ms=5000):
 def read_next_packet(capture_client):
     """Drain the next available packet from an IAudioCaptureClient.
 
-    Returns (data: bytes or None, frames: int, flags: int, hr: int).
-    data is None when no packet is ready OR when AUDCLNT_E_DEVICE_INVALIDATED.
-    Caller distinguishes by checking hr.
+    Returns (data_bytes, frames, flags, hr).
+    - On no packet ready: returns (None, 0, 0, 0).
+    - On AUDCLNT_E_DEVICE_INVALIDATED: returns (None, 0, 0, 0x88890004).
+    - On success: returns (bytes, frames, flags, 0).
+
+    capture_client is expected to be a COM pointer to IAudioCaptureClient.
+    The caller guarantees it was obtained from a successful activation +
+    GetService path, and that _native_frame_bytes has been stashed on it.
     """
-    # Stub body — full implementation uses GetNextPacketSize + GetBuffer +
-    # ctypes.string_at + ReleaseBuffer. Fully typed via comtypes IAudioCaptureClient.
-    # See design doc Section "COM Integration / read_available() inner loop".
-    raise NotImplementedError(
-        "read_next_packet must be implemented against IAudioCaptureClient; "
-        "see Section 2 of the design doc. For now, ProcessCaptureStream can "
-        "inject a fake for tests."
-    )
+    # Defined interface on the fly to avoid a separate IAudioCaptureClient class:
+    # we only need GetNextPacketSize, GetBuffer, ReleaseBuffer.
+    get_next_packet_size = capture_client.GetNextPacketSize
+    get_buffer = capture_client.GetBuffer
+    release_buffer = capture_client.ReleaseBuffer
+
+    try:
+        num_frames = get_next_packet_size()
+    except comtypes.COMError as ce:
+        hr = ce.hresult & 0xFFFFFFFF
+        if hr == AUDCLNT_E_DEVICE_INVALIDATED:
+            return None, 0, 0, hr
+        raise
+
+    if num_frames == 0:
+        return None, 0, 0, 0
+
+    try:
+        data_ptr, frames, flags, _dev_pos, _qpc_pos = get_buffer()
+    except comtypes.COMError as ce:
+        hr = ce.hresult & 0xFFFFFFFF
+        if hr == AUDCLNT_E_DEVICE_INVALIDATED:
+            return None, 0, 0, hr
+        raise
+
+    byte_count = frames * capture_client._native_frame_bytes
+    if flags & AUDCLNT_BUFFERFLAGS_SILENT:
+        raw = b"\x00" * byte_count
+    else:
+        raw = ctypes.string_at(data_ptr, byte_count)
+    release_buffer(frames)
+    return raw, frames, flags, 0
