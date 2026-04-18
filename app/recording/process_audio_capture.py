@@ -149,6 +149,7 @@ class ProcessCaptureStream:
         self.last_error = None
         self._client = None
         self._capture_client = None
+        self._native_frame_bytes = None
         self._resampler = None
         self._pre_resample_buf = np.array([], dtype=np.float32)
         self._post_mix_tail = np.array([], dtype=np.float32)
@@ -161,18 +162,25 @@ class ProcessCaptureStream:
         holds the HRESULT name (never raises).
         """
         try:
-            client, hr = self._activator(self.pid)
+            result = self._activator(self.pid)
         except Exception as e:
             self.last_error = f"activation_exception: {e}"
             return False
+
+        # Real path returns (_ActivatedContext, hr); fakes return (obj, hr)
+        # where obj has native_rate/channels/format attrs directly.
+        client, hr = result
 
         if hr != 0 or client is None:
             self.last_error = hresult_name(hr) if hr != 0 else "activation_null_client"
             return False
 
-        self._client = client
-        # The activator may attach format hints to the client (real COM path
-        # queries these from the negotiated format; fakes set them directly).
+        # Resolve the underlying audio_client: for _ActivatedContext this is
+        # the actual IAudioClient pointer; for fakes without an audio_client
+        # attribute, fall back to the container itself.
+        self._client = getattr(client, "audio_client", client)
+        self._capture_client = getattr(client, "capture_client", None)
+        self._native_frame_bytes = getattr(client, "native_frame_bytes", None)
         self.native_rate = getattr(client, "native_rate", 48000)
         self.native_channels = getattr(client, "native_channels", 2)
         self.native_format = getattr(client, "native_format", "float32")
@@ -203,82 +211,102 @@ class ProcessCaptureStream:
         if not self.is_active:
             return chunks
 
-        # The _packet_source attribute lets tests inject packets. Real COM
-        # path fills it via an internal generator that calls _process_com.read_next_packet.
-        source = getattr(self, "_packet_source", None)
-        if source is None:
-            source = self._com_packet_iter()
-            self._packet_source = source
-
+        # Test path: pull from an injected iterator. Real path: re-enter
+        # read_next_packet until it reports "no more packets". The real path
+        # MUST NOT cache a generator — process-loopback clients produce
+        # packets continuously, and a generator that returns once goes dead.
         try:
-            while True:
-                try:
-                    pkt = next(source)
-                except StopIteration:
-                    break
-                if pkt is None:
-                    break
-                hr = pkt.get("hr", 0)
-                if hr == 0x88890004:   # AUDCLNT_E_DEVICE_INVALIDATED
-                    self.is_active = False
-                    self.last_error = hresult_name(hr)
-                    break
-                raw = pkt["raw"]
-                frames = pkt["frames"]
-                flags = pkt.get("flags", 0)
-                if raw is None or frames == 0:
-                    continue
-
-                if flags & 0x2:   # AUDCLNT_BUFFERFLAGS_SILENT
-                    # Skip dtype/downmix/resample; produce zero mono chunk at native rate.
-                    mono_native = np.zeros(frames, dtype=np.float32)
-                else:
-                    arr = _convert_dtype(
-                        raw,
-                        format_tag=self.native_format,
-                        bits_per_sample=self._bits_for_format(self.native_format),
-                    )
-                    if self.native_channels > 1:
-                        arr = arr.reshape(-1, self.native_channels).mean(axis=1)
-                    mono_native = arr.astype(np.float32)
-
-                resampled = self._resampler.push(mono_native)
-                if resampled.size > 0:
-                    chunks.append(resampled)
+            if hasattr(self, "_packet_source") and self._packet_source is not None:
+                packets = self._drain_test_source()
+            else:
+                packets = self._drain_real_source()
         except Exception as e:
-            logger.exception("ProcessCaptureStream %s read error", self.pid)
+            logger.exception("ProcessCaptureStream %s drain error", self.pid)
             self.is_active = False
             self.last_error = f"read_exception: {e}"
+            return chunks
+
+        for pkt in packets:
+            hr = pkt.get("hr", 0)
+            if hr == 0x88890004:   # AUDCLNT_E_DEVICE_INVALIDATED
+                self.is_active = False
+                self.last_error = hresult_name(hr)
+                break
+            raw = pkt.get("raw")
+            frames = pkt.get("frames", 0)
+            flags = pkt.get("flags", 0)
+            if raw is None or frames == 0:
+                continue
+
+            if flags & 0x2:   # AUDCLNT_BUFFERFLAGS_SILENT
+                mono_native = np.zeros(frames, dtype=np.float32)
+            else:
+                arr = _convert_dtype(
+                    raw,
+                    format_tag=self.native_format,
+                    bits_per_sample=self._bits_for_format(self.native_format),
+                )
+                if self.native_channels > 1:
+                    arr = arr.reshape(-1, self.native_channels).mean(axis=1)
+                mono_native = arr.astype(np.float32)
+
+            resampled = self._resampler.push(mono_native)
+            if resampled.size > 0:
+                chunks.append(resampled)
 
         return chunks
 
-    def _com_packet_iter(self):
-        """Generator that yields packets from the real capture client.
-
-        Built once per activation. Each __next__ calls _process_com.read_next_packet
-        (which is itself a thin wrapper around GetNextPacketSize / GetBuffer /
-        ReleaseBuffer). Returns None to signal "no more packets ready this tick".
-        """
-        from app.recording._process_com import read_next_packet as _rnp
-        while self.is_active and self._client is not None:
+    def _drain_test_source(self):
+        """Pull all remaining packets from the test-injected iterator."""
+        packets = []
+        while True:
             try:
-                data, frames, flags, hr = _rnp(self._capture_client)
-            except NotImplementedError:
-                # During the phased implementation: read shim not yet wired;
-                # real packet reading is a Tier-3 concern.
-                return
-            if data is None and hr == 0:
-                return   # no more packets right now
-            yield {"raw": data, "frames": frames, "flags": flags, "hr": hr}
+                pkt = next(self._packet_source)
+            except StopIteration:
+                break
+            if pkt is None:
+                break
+            packets.append(pkt)
+        return packets
+
+    def _drain_real_source(self):
+        """Real-COM path: loop read_next_packet until no more packets are ready."""
+        if self._capture_client is None or self._native_frame_bytes is None:
+            return []
+        from app.recording._process_com import read_next_packet
+        packets = []
+        while True:
+            data, frames, flags, hr = read_next_packet(
+                self._capture_client, self._native_frame_bytes,
+            )
+            if hr != 0:
+                # Device invalidated or other error — surface it via a sentinel
+                # packet so the processing loop marks us inactive uniformly.
+                packets.append({"raw": None, "frames": 0, "flags": 0, "hr": hr})
+                break
+            if data is None and frames == 0:
+                break   # no more packets ready this tick
+            packets.append({"raw": data, "frames": frames, "flags": flags, "hr": 0})
+        return packets
 
     @staticmethod
     def _bits_for_format(fmt):
         return {"float32": 32, "s16": 16, "s24": 32}.get(fmt, 32)
 
     def release(self):
+        # Best-effort Stop() on the real IAudioClient; fakes without a Stop
+        # method are silently skipped.
+        if self._client is not None:
+            stopper = getattr(self._client, "Stop", None)
+            if callable(stopper):
+                try:
+                    stopper()
+                except Exception:
+                    logger.exception("Error stopping audio client for PID %s", self.pid)
         self.is_active = False
         self._client = None
         self._capture_client = None
+        self._native_frame_bytes = None
         self._resampler = None
         self._pre_resample_buf = np.array([], dtype=np.float32)
         self._post_mix_tail = np.array([], dtype=np.float32)

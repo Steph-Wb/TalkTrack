@@ -6,8 +6,19 @@ separate file because mocking these is a high-effort/low-signal rabbit hole
 - downstream code injects fakes for the activate/read functions when testing.
 """
 
-# HRESULT codes from Audioclient.h / winerror.h. Add more as needed.
-# Reference: https://learn.microsoft.com/en-us/windows/win32/api/audioclient/
+import ctypes
+from ctypes import (
+    POINTER, byref, c_void_p, c_int32, c_uint32, c_uint64, c_wchar_p,
+    c_ubyte,
+)
+from ctypes import wintypes
+
+import comtypes
+from comtypes import GUID, COMMETHOD, IUnknown
+
+
+# --- HRESULT codes from Audioclient.h / winerror.h ---
+
 _HRESULT_NAMES = {
     0x00000000: "S_OK",
     0x80004001: "E_NOTIMPL",
@@ -18,6 +29,8 @@ _HRESULT_NAMES = {
     0x80070005: "E_ACCESSDENIED",
     0x80070057: "E_INVALIDARG",
     0x80070490: "ERROR_NOT_FOUND_HRESULT",
+    0x8007000E: "E_OUTOFMEMORY",
+    0x80010106: "RPC_E_CHANGED_MODE",
     # AUDCLNT_ERR codes (AUDCLNT severity bits = 0x8889xxxx)
     0x88890001: "AUDCLNT_E_NOT_INITIALIZED",
     0x88890002: "AUDCLNT_E_ALREADY_INITIALIZED",
@@ -37,51 +50,41 @@ _HRESULT_NAMES = {
 
 def hresult_name(hr):
     """Map an HRESULT to a symbolic name, falling back to hex for unknowns."""
-    # Normalize signed ints returned by ctypes (-0x77767FFC → 0x88890004).
     hr_u32 = hr & 0xFFFFFFFF
     if hr_u32 in _HRESULT_NAMES:
         return _HRESULT_NAMES[hr_u32]
     return f"0x{hr_u32:08X}"
 
 
-import ctypes
-from ctypes import wintypes
-
-
 # --- Constants from audioclient.h / audioclientactivationparams.h ---
 
-# Virtual device string for process-loopback activation. This is a stable GUID
-# string; not an interface IID.
 VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = "{8FDC6FBC-56CC-4DA6-B4FA-9CB9F1E09B72}"
 
-# AUDIOCLIENT_ACTIVATION_TYPE enum.
 AUDIOCLIENT_ACTIVATION_TYPE_DEFAULT = 0
 AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK = 1
 
-# PROCESS_LOOPBACK_MODE enum.
 PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE = 0
 PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE = 1
 
-# IAudioClient::Initialize flags.
 AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000
 AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000
 AUDCLNT_SHAREMODE_SHARED = 0
 
-# WAVE_FORMAT tags.
 WAVE_FORMAT_PCM = 0x0001
 WAVE_FORMAT_IEEE_FLOAT = 0x0003
 
-# AUDCLNT_BUFFERFLAGS bits.
 AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY = 0x1
 AUDCLNT_BUFFERFLAGS_SILENT = 0x2
 AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR = 0x4
 
-# GetNextPacketSize / GetBuffer status hints.
 AUDCLNT_S_BUFFER_EMPTY = 0x08890001
 
-# Common HRESULTs for activation (32-bit unsigned form).
 AUDCLNT_E_DEVICE_INVALIDATED = 0x88890004
 E_ACCESSDENIED = 0x80070005
+
+# CoInitializeEx flags.
+COINIT_MULTITHREADED = 0x0
+RPC_E_CHANGED_MODE = 0x80010106
 
 
 # --- Struct definitions ---
@@ -89,7 +92,7 @@ E_ACCESSDENIED = 0x80070005
 class AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS(ctypes.Structure):
     _fields_ = [
         ("TargetProcessId", wintypes.DWORD),
-        ("ProcessLoopbackMode", wintypes.DWORD),  # PROCESS_LOOPBACK_MODE enum
+        ("ProcessLoopbackMode", wintypes.DWORD),
     ]
 
 
@@ -115,6 +118,28 @@ class WAVEFORMATEX(ctypes.Structure):
     ]
 
 
+class _BLOB(ctypes.Structure):
+    _fields_ = [("cbSize", c_uint32), ("pBlobData", c_void_p)]
+
+
+class _PROPVARIANT(ctypes.Structure):
+    """PROPVARIANT for VT_BLOB carry — 24 bytes on 64-bit Windows.
+
+    Header: vt(2) + wReserved1(2) + wReserved2(2) + wReserved3(2) = 8 bytes.
+    Union:  16 bytes on 64-bit (largest variant member — accommodates DECIMAL).
+    The BLOB layout (cbSize DWORD + pointer) on 64-bit is 4 + 4 pad + 8 = 16 bytes,
+    which fills the union exactly. Do NOT add extra padding — Windows reads this
+    by-value, and an oversized struct shifts the activation function's arg list.
+    """
+    _fields_ = [
+        ("vt", ctypes.c_ushort),
+        ("wReserved1", ctypes.c_ushort),
+        ("wReserved2", ctypes.c_ushort),
+        ("wReserved3", ctypes.c_ushort),
+        ("blob", _BLOB),
+    ]
+
+
 def make_format_ieee_float(sample_rate=48000, channels=2, bits=32):
     """Build a WAVEFORMATEX for IEEE_FLOAT PCM."""
     fmt = WAVEFORMATEX()
@@ -128,36 +153,22 @@ def make_format_ieee_float(sample_rate=48000, channels=2, bits=32):
     return fmt
 
 
-import comtypes
-from comtypes import GUID, COMMETHOD, IUnknown
-from ctypes import POINTER, byref, c_void_p, c_int32, c_uint32, c_uint64, c_wchar_p
+# --- COM GUIDs ---
 
-
-# IActivateAudioInterfaceCompletionHandler
 IID_IActivateAudioInterfaceCompletionHandler = GUID(
     "{41D949AB-9862-444A-80F6-C261334DA5EB}"
 )
-
-# IActivateAudioInterfaceAsyncOperation
 IID_IActivateAudioInterfaceAsyncOperation = GUID(
     "{72A22D78-CDE4-431D-B8CC-843A71199B6D}"
 )
-
-# IAudioClient (standard WASAPI IID).
 IID_IAudioClient = GUID("{1CB9AD4C-DBFA-4C32-B178-C2F568A703B2}")
-
-# IAudioCaptureClient.
 IID_IAudioCaptureClient = GUID("{C8ADBD64-E71E-48A0-A4DE-185C395CD317}")
 
 
-class IActivateAudioInterfaceCompletionHandler(IUnknown):
-    _iid_ = IID_IActivateAudioInterfaceCompletionHandler
-    _methods_ = [
-        COMMETHOD(
-            [], comtypes.HRESULT, "ActivateCompleted",
-            (["in"], POINTER(IUnknown), "activateOperation"),
-        ),
-    ]
+# --- COM interfaces ---
+
+# REFERENCE_TIME is LONGLONG (signed 64-bit, 100 ns units).
+REFERENCE_TIME = ctypes.c_longlong
 
 
 class IActivateAudioInterfaceAsyncOperation(IUnknown):
@@ -171,30 +182,173 @@ class IActivateAudioInterfaceAsyncOperation(IUnknown):
     ]
 
 
+class IActivateAudioInterfaceCompletionHandler(IUnknown):
+    _iid_ = IID_IActivateAudioInterfaceCompletionHandler
+    _methods_ = [
+        COMMETHOD(
+            [], comtypes.HRESULT, "ActivateCompleted",
+            (["in"], POINTER(IActivateAudioInterfaceAsyncOperation),
+             "activateOperation"),
+        ),
+    ]
+
+
+class IAudioClient(IUnknown):
+    """Subset of IAudioClient. Methods MUST be declared in vtable order, from
+    the first method after IUnknown's QueryInterface/AddRef/Release triad.
+    We declare all 12 to keep slot offsets correct; only a few are called."""
+    _iid_ = IID_IAudioClient
+    _methods_ = [
+        COMMETHOD(
+            [], comtypes.HRESULT, "Initialize",
+            (["in"], c_uint32, "ShareMode"),
+            (["in"], c_uint32, "StreamFlags"),
+            (["in"], REFERENCE_TIME, "hnsBufferDuration"),
+            (["in"], REFERENCE_TIME, "hnsPeriodicity"),
+            (["in"], POINTER(WAVEFORMATEX), "pFormat"),
+            (["in"], POINTER(GUID), "AudioSessionGuid"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetBufferSize",
+            (["out"], POINTER(c_uint32), "pNumBufferFrames"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetStreamLatency",
+            (["out"], POINTER(REFERENCE_TIME), "phnsLatency"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetCurrentPadding",
+            (["out"], POINTER(c_uint32), "pNumPaddingFrames"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "IsFormatSupported",
+            (["in"], c_uint32, "ShareMode"),
+            (["in"], POINTER(WAVEFORMATEX), "pFormat"),
+            (["out"], POINTER(POINTER(WAVEFORMATEX)), "ppClosestMatch"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetMixFormat",
+            (["out"], POINTER(POINTER(WAVEFORMATEX)), "ppDeviceFormat"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetDevicePeriod",
+            (["out"], POINTER(REFERENCE_TIME), "phnsDefaultDevicePeriod"),
+            (["out"], POINTER(REFERENCE_TIME), "phnsMinimumDevicePeriod"),
+        ),
+        COMMETHOD([], comtypes.HRESULT, "Start"),
+        COMMETHOD([], comtypes.HRESULT, "Stop"),
+        COMMETHOD([], comtypes.HRESULT, "Reset"),
+        COMMETHOD(
+            [], comtypes.HRESULT, "SetEventHandle",
+            (["in"], wintypes.HANDLE, "eventHandle"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetService",
+            (["in"], POINTER(GUID), "riid"),
+            (["out"], POINTER(c_void_p), "ppv"),
+        ),
+    ]
+
+
+class IAudioCaptureClient(IUnknown):
+    _iid_ = IID_IAudioCaptureClient
+    _methods_ = [
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetBuffer",
+            (["out"], POINTER(POINTER(c_ubyte)), "ppData"),
+            (["out"], POINTER(c_uint32), "pNumFramesToRead"),
+            (["out"], POINTER(c_uint32), "pdwFlags"),
+            (["out"], POINTER(c_uint64), "pu64DevicePosition"),
+            (["out"], POINTER(c_uint64), "pu64QPCPosition"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "ReleaseBuffer",
+            (["in"], c_uint32, "NumFramesRead"),
+        ),
+        COMMETHOD(
+            [], comtypes.HRESULT, "GetNextPacketSize",
+            (["out"], POINTER(c_uint32), "pNumFramesInNextPacket"),
+        ),
+    ]
+
+
 class _CompletionHandler(comtypes.COMObject):
-    """Python COM object that signals a Win32 event when activation completes."""
+    """Python COM object that signals a Win32 event when activation completes.
+
+    comtypes COMObject method signatures do NOT include the `this` pointer —
+    the library handles that internally. The arg list must match the COM
+    interface IDL exactly (minus `this`).
+    """
     _com_interfaces_ = [IActivateAudioInterfaceCompletionHandler]
 
     def __init__(self, event_handle):
         super().__init__()
         self._event = event_handle
 
-    def ActivateCompleted(self, this, activate_operation):
+    def ActivateCompleted(self, activate_operation):
         ctypes.windll.kernel32.SetEvent(self._event)
         return 0   # S_OK
 
 
-def activate_process_loopback(pid, timeout_ms=5000):
-    """Synchronously activate an IAudioClient for per-process loopback.
+# --- Activated-context wrapper ---
 
-    Returns (audio_client: IUnknown-pointer, hresult: int).
-    On success, hresult == S_OK (0) and audio_client is non-null.
-    On failure, audio_client is None and hresult is the error code.
+class _ActivatedContext:
+    """Bundles the activated IAudioClient + IAudioCaptureClient + format info.
+
+    ProcessCaptureStream stores the pieces it needs via getattr, so this
+    duck-types cleanly against the lightweight objects test fakes produce.
     """
-    # Ensure MTA init on this thread.
-    ctypes.windll.ole32.CoInitializeEx(None, 0x0)  # COINIT_MULTITHREADED
+    def __init__(self, audio_client, capture_client, native_rate,
+                 native_channels, native_format, native_frame_bytes):
+        self.audio_client = audio_client
+        self.capture_client = capture_client
+        self.native_rate = native_rate
+        self.native_channels = native_channels
+        self.native_format = native_format
+        self.native_frame_bytes = native_frame_bytes
 
-    # Build params.
+
+def _format_info_from_waveformatex(fmt):
+    """Inspect a WAVEFORMATEX and produce the (rate, channels, format_tag, frame_bytes) tuple."""
+    rate = int(fmt.nSamplesPerSec)
+    channels = int(fmt.nChannels)
+    bits = int(fmt.wBitsPerSample)
+    tag = int(fmt.wFormatTag)
+    block_align = int(fmt.nBlockAlign) or (channels * bits // 8)
+
+    # Determine our internal format_tag string.
+    # WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries the real tag in a sub-format GUID
+    # but for process-loopback the default Windows path returns float32, so we
+    # treat anything reporting 32-bit float as "float32" and fall back to the
+    # wave-format-tag otherwise.
+    if tag == WAVE_FORMAT_IEEE_FLOAT or (tag == 0xFFFE and bits == 32):
+        format_tag = "float32"
+    elif tag == WAVE_FORMAT_PCM and bits == 16:
+        format_tag = "s16"
+    elif tag == WAVE_FORMAT_PCM and bits in (24, 32):
+        format_tag = "s24"
+    else:
+        format_tag = "float32"   # best effort; resample_poly will still work
+    return rate, channels, format_tag, block_align
+
+
+def activate_process_loopback(pid, timeout_ms=5000):
+    """Synchronously activate an IAudioClient + IAudioCaptureClient for one PID.
+
+    Returns (_ActivatedContext, hresult: int).
+    On success, hresult == 0 and the context holds the live COM pointers.
+    On any failure, returns (None, hresult). The caller translates the hresult
+    via hresult_name().
+    """
+    # MTA init. CoInitializeEx returns S_OK on first call, S_FALSE if already
+    # initialized in the same mode, or RPC_E_CHANGED_MODE if the thread is STA.
+    # RPC_E_CHANGED_MODE is fatal for ActivateAudioInterfaceAsync — surface it.
+    hr_init = ctypes.windll.ole32.CoInitializeEx(None, COINIT_MULTITHREADED)
+    hr_init_u32 = hr_init & 0xFFFFFFFF
+    if hr_init_u32 == RPC_E_CHANGED_MODE:
+        return None, RPC_E_CHANGED_MODE
+
+    # Build AUDIOCLIENT_ACTIVATION_PARAMS.
     params = AUDIOCLIENT_ACTIVATION_PARAMS()
     params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
     params.ProcessLoopbackParams.TargetProcessId = pid
@@ -202,71 +356,130 @@ def activate_process_loopback(pid, timeout_ms=5000):
         PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
     )
 
-    # Wrap as PROPVARIANT(VT_BLOB). The BLOB holds (cbSize, pBlobData).
-    # comtypes doesn't expose PROPVARIANT blob construction; build via ctypes.
-    class _BLOB(ctypes.Structure):
-        _fields_ = [("cbSize", c_uint32), ("pBlobData", c_void_p)]
-
-    class _PROPVARIANT(ctypes.Structure):
-        _fields_ = [
-            ("vt", ctypes.c_ushort),
-            ("wReserved1", ctypes.c_ushort),
-            ("wReserved2", ctypes.c_ushort),
-            ("wReserved3", ctypes.c_ushort),
-            ("blob", _BLOB),
-            # Pad to full size (16 bytes on 32-bit, 24 on 64-bit).
-            ("_pad", ctypes.c_ubyte * 8),
-        ]
-
+    # Wrap as PROPVARIANT(VT_BLOB). Keep `params` in scope — pBlobData is a
+    # raw pointer into its buffer and the activation is async. Holding it on
+    # this function's local stack frame is sufficient because we block on
+    # WaitForSingleObject before returning.
     pv = _PROPVARIANT()
     pv.vt = 0x41   # VT_BLOB
     pv.blob.cbSize = ctypes.sizeof(params)
     pv.blob.pBlobData = ctypes.cast(ctypes.pointer(params), c_void_p)
 
-    # Create a manual-reset event for the handler to signal.
+    # Manual-reset event for the handler to signal.
     event_handle = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
     if not event_handle:
-        return None, -1
+        return None, 0x80004005   # E_FAIL; CreateEventW failure is exceptional.
 
     handler = _CompletionHandler(event_handle)
 
-    # Call ActivateAudioInterfaceAsync. Use WinDLL (not OleDLL) so we get the
-    # raw HRESULT back rather than an auto-raise — we want to translate failures
-    # into last_error strings, not exceptions.
-    mmdev = ctypes.WinDLL("Mmdevapi.dll")
-    ActivateAudioInterfaceAsync = mmdev.ActivateAudioInterfaceAsync
-    ActivateAudioInterfaceAsync.restype = ctypes.c_long
-    ActivateAudioInterfaceAsync.argtypes = [
-        c_wchar_p, POINTER(GUID), c_void_p,
-        POINTER(IActivateAudioInterfaceCompletionHandler),
-        POINTER(POINTER(IActivateAudioInterfaceAsyncOperation)),
-    ]
-    operation = POINTER(IActivateAudioInterfaceAsyncOperation)()
-    hr = ActivateAudioInterfaceAsync(
-        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-        byref(IID_IAudioClient),
-        ctypes.cast(ctypes.pointer(pv), c_void_p),
-        handler,
-        byref(operation),
-    )
-    if hr != 0:
+    try:
+        # Call ActivateAudioInterfaceAsync via WinDLL (not OleDLL) so we see
+        # the raw HRESULT rather than an auto-raise.
+        mmdev = ctypes.WinDLL("Mmdevapi.dll")
+        ActivateAudioInterfaceAsync = mmdev.ActivateAudioInterfaceAsync
+        ActivateAudioInterfaceAsync.restype = ctypes.c_long
+        ActivateAudioInterfaceAsync.argtypes = [
+            c_wchar_p, POINTER(GUID), c_void_p,
+            POINTER(IActivateAudioInterfaceCompletionHandler),
+            POINTER(POINTER(IActivateAudioInterfaceAsyncOperation)),
+        ]
+        operation = POINTER(IActivateAudioInterfaceAsyncOperation)()
+        hr = ActivateAudioInterfaceAsync(
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            byref(IID_IAudioClient),
+            ctypes.cast(ctypes.pointer(pv), c_void_p),
+            handler,
+            byref(operation),
+        )
+        if hr != 0:
+            return None, hr & 0xFFFFFFFF
+
+        # Wait for the completion handler to SetEvent.
+        wait_result = ctypes.windll.kernel32.WaitForSingleObject(
+            event_handle, timeout_ms,
+        )
+        if wait_result != 0:
+            # WAIT_TIMEOUT=0x102, WAIT_ABANDONED=0x80, WAIT_FAILED=0xFFFFFFFF.
+            return None, 0x80004005   # E_FAIL — couldn't complete activation.
+
+        # Pull the activated interface. comtypes returns [out] params as a tuple.
+        activate_hr, activated = operation.GetActivateResult()
+        if activate_hr != 0 or not activated:
+            return None, (activate_hr & 0xFFFFFFFF) if activate_hr else 0x80004003
+
+        # QueryInterface to IAudioClient — activated is POINTER(IUnknown).
+        try:
+            audio_client = activated.QueryInterface(IAudioClient)
+        except comtypes.COMError as ce:
+            return None, ce.hresult & 0xFFFFFFFF
+
+        # Initialize in loopback mode. Process-loopback always ignores the
+        # requested format and operates at the system mix format (typically
+        # 48 kHz stereo float32). We pass a best-guess format anyway because
+        # the API documents it as required.
+        requested_format = make_format_ieee_float(48000, 2, 32)
+        try:
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                2_000_000,   # 200 ms buffer (units of 100 ns)
+                0,
+                byref(requested_format),
+                None,
+            )
+        except comtypes.COMError as ce:
+            return None, ce.hresult & 0xFFFFFFFF
+
+        # Query negotiated format via GetMixFormat so we resample from the
+        # true rate, not from what we hoped for.
+        try:
+            mix_format_ptr = audio_client.GetMixFormat()
+        except comtypes.COMError as ce:
+            # Fall back to the requested format if GetMixFormat fails.
+            native_rate, native_channels, native_format, native_frame_bytes = (
+                _format_info_from_waveformatex(requested_format)
+            )
+        else:
+            # mix_format_ptr is POINTER(WAVEFORMATEX). Dereference once.
+            try:
+                native_rate, native_channels, native_format, native_frame_bytes = (
+                    _format_info_from_waveformatex(mix_format_ptr.contents)
+                )
+            finally:
+                # GetMixFormat allocates via CoTaskMemAlloc — free it.
+                ctypes.windll.ole32.CoTaskMemFree(mix_format_ptr)
+
+        # Get IAudioCaptureClient via GetService.
+        try:
+            capture_client_void = audio_client.GetService(byref(IID_IAudioCaptureClient))
+        except comtypes.COMError as ce:
+            return None, ce.hresult & 0xFFFFFFFF
+
+        # capture_client_void is a c_void_p. Wrap as IAudioCaptureClient.
+        capture_client = ctypes.cast(
+            capture_client_void, POINTER(IAudioCaptureClient),
+        )
+
+        # Start the stream.
+        try:
+            audio_client.Start()
+        except comtypes.COMError as ce:
+            return None, ce.hresult & 0xFFFFFFFF
+
+        context = _ActivatedContext(
+            audio_client=audio_client,
+            capture_client=capture_client,
+            native_rate=native_rate,
+            native_channels=native_channels,
+            native_format=native_format,
+            native_frame_bytes=native_frame_bytes,
+        )
+        return context, 0
+    finally:
         ctypes.windll.kernel32.CloseHandle(event_handle)
-        return None, hr
-
-    # Block until the completion handler fires.
-    wait_result = ctypes.windll.kernel32.WaitForSingleObject(event_handle, timeout_ms)
-    ctypes.windll.kernel32.CloseHandle(event_handle)
-    if wait_result != 0:
-        return None, -2   # WAIT_TIMEOUT or WAIT_ABANDONED
-
-    # Pull the activated interface. comtypes returns [out] params as a tuple.
-    activate_hr, activated = operation.GetActivateResult()
-    if activate_hr != 0:
-        return None, activate_hr & 0xFFFFFFFF
-    return activated, 0
 
 
-def read_next_packet(capture_client):
+def read_next_packet(capture_client, native_frame_bytes):
     """Drain the next available packet from an IAudioCaptureClient.
 
     Returns (data_bytes, frames, flags, hr).
@@ -274,39 +487,32 @@ def read_next_packet(capture_client):
     - On AUDCLNT_E_DEVICE_INVALIDATED: returns (None, 0, 0, 0x88890004).
     - On success: returns (bytes, frames, flags, 0).
 
-    capture_client is expected to be a COM pointer to IAudioCaptureClient.
-    The caller guarantees it was obtained from a successful activation +
-    GetService path, and that _native_frame_bytes has been stashed on it.
+    native_frame_bytes is the byte size of one frame (channels * bytes_per_sample)
+    at the negotiated format. It comes from the format info captured at activation.
     """
-    # Defined interface on the fly to avoid a separate IAudioCaptureClient class:
-    # we only need GetNextPacketSize, GetBuffer, ReleaseBuffer.
-    get_next_packet_size = capture_client.GetNextPacketSize
-    get_buffer = capture_client.GetBuffer
-    release_buffer = capture_client.ReleaseBuffer
-
     try:
-        num_frames = get_next_packet_size()
+        num_frames = capture_client.GetNextPacketSize()
     except comtypes.COMError as ce:
         hr = ce.hresult & 0xFFFFFFFF
         if hr == AUDCLNT_E_DEVICE_INVALIDATED:
             return None, 0, 0, hr
         raise
 
-    if num_frames == 0:
+    if not num_frames:
         return None, 0, 0, 0
 
     try:
-        data_ptr, frames, flags, _dev_pos, _qpc_pos = get_buffer()
+        data_ptr, frames, flags, _dev_pos, _qpc_pos = capture_client.GetBuffer()
     except comtypes.COMError as ce:
         hr = ce.hresult & 0xFFFFFFFF
         if hr == AUDCLNT_E_DEVICE_INVALIDATED:
             return None, 0, 0, hr
         raise
 
-    byte_count = frames * capture_client._native_frame_bytes
+    byte_count = int(frames) * int(native_frame_bytes)
     if flags & AUDCLNT_BUFFERFLAGS_SILENT:
         raw = b"\x00" * byte_count
     else:
         raw = ctypes.string_at(data_ptr, byte_count)
-    release_buffer(frames)
-    return raw, frames, flags, 0
+    capture_client.ReleaseBuffer(frames)
+    return raw, int(frames), int(flags), 0
