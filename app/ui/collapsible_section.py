@@ -76,3 +76,9 @@ class CollapsibleSection(QWidget):
 
     def set_expanded(self, expanded):
         self._toggle_btn.setChecked(expanded)
+
+    def set_title(self, title):
+        """Update the displayed title. Re-renders with the current arrow."""
+        self._title = title
+        arrow = "\u25be" if self._toggle_btn.isChecked() else "\u25b8"
+        self._toggle_btn.setText(f"{arrow}  {title}")

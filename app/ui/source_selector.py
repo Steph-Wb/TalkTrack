@@ -14,6 +14,33 @@ from app.utils.platform_info import is_windows_11
 from app.ui.collapsible_section import CollapsibleSection
 
 
+def format_per_app_suffix(names):
+    """Build the collapsed-title suffix for per-app capture mode.
+
+    [] -> "(No apps selected)"
+    [A] -> "(A)"
+    [A, B] -> "(A, B)"
+    [A, B, ...] -> "(A, B +N more)" where N = len - 2.
+    """
+    if not names:
+        return "(No apps selected)"
+    if len(names) <= 2:
+        return f"({', '.join(names)})"
+    return f"({names[0]}, {names[1]} +{len(names) - 2} more)"
+
+
+def format_legacy_suffix(combo_text):
+    """Build the collapsed-title suffix for legacy loopback mode.
+
+    Strips the trailing " (WASAPI Loopback)" marker from the combo label.
+    """
+    wasapi_suffix = " (WASAPI Loopback)"
+    text = combo_text
+    if text.endswith(wasapi_suffix):
+        text = text[: -len(wasapi_suffix)]
+    return f"({text})"
+
+
 class SourceSelector(QWidget):
     """Widget for selecting audio input sources.
 
@@ -27,6 +54,8 @@ class SourceSelector(QWidget):
     # Emitted when a checked app becomes active (for auto-record)
     apps_became_active = pyqtSignal()
 
+    _BASE_TITLE = "Audio Sources"
+
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
         self._config = config
@@ -38,6 +67,7 @@ class SourceSelector(QWidget):
         self._setup_ui()
         self.refresh_devices()
         self._restore_capture_mode()
+        self._update_section_title()
 
         if self._win11:
             self._start_auto_refresh()
@@ -47,7 +77,7 @@ class SourceSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Collapsible audio sources section
-        self._section = CollapsibleSection("Audio Sources")
+        self._section = CollapsibleSection(self._BASE_TITLE)
         content = self._section.content_layout()
 
         # Microphone selector
@@ -89,9 +119,12 @@ class SourceSelector(QWidget):
 
         # Refresh devices when the section is expanded (picks up any mic or
         # output device the user plugged in while the section was closed).
-        self._section.toggled.connect(
-            lambda expanded: self.refresh_devices() if expanded else None
-        )
+        self._section.toggled.connect(self._on_section_toggled)
+
+        # Keep the collapsed title suffix in sync with selection state.
+        self.loopback_combo.currentIndexChanged.connect(self._update_section_title)
+        if self.app_list is not None:
+            self.app_list.itemChanged.connect(self._update_section_title)
 
         # Start expanded by default
         self._section.set_expanded(True)
@@ -152,6 +185,34 @@ class SourceSelector(QWidget):
             is_per_app = button_id == 0
             self.app_list.setVisible(is_per_app)
             self.loopback_combo.setVisible(not is_per_app)
+        self._update_section_title()
+
+    def _on_section_toggled(self, expanded):
+        if expanded:
+            self.refresh_devices()
+        self._update_section_title()
+
+    def _selected_sources_text(self):
+        """Build the ' (...)' suffix shown when the section is collapsed."""
+        if self._win11 and self.is_per_app_mode():
+            names = []
+            if self.app_list is not None:
+                for i in range(self.app_list.count()):
+                    item = self.app_list.item(i)
+                    if item.checkState() == Qt.CheckState.Checked:
+                        names.append(item.text().split("  (")[0])
+            return format_per_app_suffix(names)
+
+        # Legacy loopback mode (Win10 or Win11 with "All system audio" radio)
+        if self.loopback_combo.currentData() is None:
+            return "(No system audio)"
+        return format_legacy_suffix(self.loopback_combo.currentText())
+
+    def _update_section_title(self):
+        if self._section.is_expanded():
+            self._section.set_title(self._BASE_TITLE)
+        else:
+            self._section.set_title(f"{self._BASE_TITLE} {self._selected_sources_text()}")
 
     def _start_auto_refresh(self):
         if self._auto_refresh_timer is None:
@@ -242,6 +303,7 @@ class SourceSelector(QWidget):
         if checked_names and not self._had_active_apps and any_checked_active:
             self.apps_became_active.emit()
         self._had_active_apps = any_checked_active
+        self._update_section_title()
 
     def refresh_devices(self):
         # Block signals while rebuilding combos so clear/addItem don't
