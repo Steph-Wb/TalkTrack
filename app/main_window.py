@@ -989,24 +989,36 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def closeEvent(self, event):
+        if not self._really_quit:
+            if not self._confirm_exit():
+                event.ignore()
+                return
+            self._really_quit = True
+
         if self._gain_save_timer.isActive():
             self._gain_save_timer.stop()
             self._flush_gain_to_config()
         if self.recorder.state != RecordingState.IDLE:
-            reply = QMessageBox.question(
-                self,
-                "Recording in Progress",
-                "A recording is in progress. Stop and save before exiting?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self.recorder.stop_recording()
-                event.accept()
-            elif reply == QMessageBox.StandardButton.No:
-                event.accept()
-            else:
-                event.ignore()
-                return
-
+            self.recorder.stop_recording()
         self.config.save()
+        if hasattr(self, "tray"):
+            self.tray.hide()
         event.accept()
+
+    def _confirm_exit(self):
+        """Show the exit-confirmation dialog. Returns True if user wants to quit."""
+        if self.recorder.state != RecordingState.IDLE:
+            body = (
+                "A recording is in progress. Exiting will stop and save "
+                "the current recording. Continue?"
+            )
+        else:
+            body = "Are you sure you want to exit?"
+        reply = QMessageBox.question(
+            self,
+            "Exit TalkTrack?",
+            body,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        return reply == QMessageBox.StandardButton.Yes
