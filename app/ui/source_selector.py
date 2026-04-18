@@ -115,6 +115,15 @@ class SourceSelector(QWidget):
         else:
             self._setup_legacy_ui(content)
 
+        # Warning label for per-app capture failures
+        self._capture_warning = QLabel("")
+        self._capture_warning.setObjectName("captureWarning")
+        self._capture_warning.setStyleSheet(
+            "color: #f9e2af; font-size: 11px; padding: 2px 4px;"
+        )
+        self._capture_warning.setVisible(False)
+        content.addWidget(self._capture_warning)
+
         layout.addWidget(self._section)
 
         # Refresh devices when the section is expanded (picks up any mic or
@@ -503,3 +512,43 @@ class SourceSelector(QWidget):
         if self.mode_group:
             self.radio_per_app.setEnabled(enabled)
             self.radio_legacy.setEnabled(enabled)
+
+    def mark_capture_failures(self, failures):
+        """Show/hide the ⚠ indicator when per-app activation fails for some PIDs.
+
+        Args:
+            failures: {pid: hresult_name_str} mapping. Empty dict clears the indicator.
+        """
+        if not failures:
+            self._capture_warning.setVisible(False)
+            self._capture_warning.setText("")
+            self._capture_warning.setToolTip("")
+            return
+
+        # Resolve PID -> display name via the current app list entries.
+        pid_to_name = {}
+        if self.app_list is not None:
+            for i in range(self.app_list.count()):
+                item = self.app_list.item(i)
+                pid_data = item.data(Qt.ItemDataRole.UserRole)
+                name = item.text()
+                if isinstance(pid_data, list):
+                    for pid in pid_data:
+                        pid_to_name[pid] = name
+                elif pid_data is not None:
+                    pid_to_name[pid_data] = name
+
+        lines = []
+        names_shown = set()
+        for pid, err in failures.items():
+            name = pid_to_name.get(pid, f"PID {pid}")
+            if name in names_shown:
+                continue
+            names_shown.add(name)
+            lines.append(f"{name}: {err}")
+
+        self._capture_warning.setText(
+            f"\u26a0 {len(names_shown)} app(s) could not be captured"
+        )
+        self._capture_warning.setToolTip("\n".join(lines))
+        self._capture_warning.setVisible(True)
