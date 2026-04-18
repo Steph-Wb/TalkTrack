@@ -431,6 +431,19 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tray") and self.tray.is_supported():
             self.tray.set_state(self.recorder.state, int(seconds))
 
+    def _is_hidden_to_tray(self):
+        return hasattr(self, "tray") and self.tray.is_supported() and self.isHidden()
+
+    def _flag_error_notification(self):
+        self._error_pending = True
+        from app.ui.tray_icon import resolve_overlay
+        self.tray.set_overlay(resolve_overlay(self._success_pending, self._error_pending))
+
+    def _flag_success_notification(self):
+        self._success_pending = True
+        from app.ui.tray_icon import resolve_overlay
+        self.tray.set_overlay(resolve_overlay(self._success_pending, self._error_pending))
+
     def _on_recording_finished(self, session):
         self._current_session = session
         self._transcript = None
@@ -569,7 +582,10 @@ class MainWindow(QMainWindow):
         if self._transcription_worker:
             # Display whatever we have
             self.transcript_viewer.hide_progress()
-        QMessageBox.warning(self, "Diarization Error", error_msg)
+        if self._is_hidden_to_tray():
+            self._flag_error_notification()
+        else:
+            QMessageBox.warning(self, "Diarization Error", error_msg)
 
     def _display_final_transcript(self, result):
         self.transcript_viewer.hide_progress()
@@ -587,6 +603,8 @@ class MainWindow(QMainWindow):
 
         self.transcript_viewer.display_transcript(result, speaker_names=speaker_names)
         self.status_label.setText("Transcription complete.")
+        if self._is_hidden_to_tray():
+            self._flag_success_notification()
 
         # Update recording header with speaker count
         if self._current_session:
@@ -610,7 +628,10 @@ class MainWindow(QMainWindow):
     def _on_transcription_error(self, error_msg):
         self.transcript_viewer.hide_progress()
         self.status_label.setText("Transcription failed.")
-        QMessageBox.warning(self, "Transcription Error", error_msg)
+        if self._is_hidden_to_tray():
+            self._flag_error_notification()
+        else:
+            QMessageBox.warning(self, "Transcription Error", error_msg)
 
     def _on_recording_deleted(self, directory):
         """Clear UI if the deleted recording was currently loaded."""
@@ -775,7 +796,10 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, error_msg):
         self.status_label.setText(f"Error: {error_msg}")
-        QMessageBox.critical(self, "Error", error_msg)
+        if self._is_hidden_to_tray():
+            self._flag_error_notification()
+        else:
+            QMessageBox.critical(self, "Error", error_msg)
 
     def _restore_from_tray(self):
         self.showNormal()
