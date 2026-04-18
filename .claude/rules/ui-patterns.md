@@ -6,6 +6,7 @@
 - Emits `toggled(bool)` signal. Exposes `add_header_widget(widget)` for right-aligned extras (e.g., Refresh button).
 - When collapsed, `setMaximumHeight(header_height)` so it can't claim empty space via layout stretch.
 - **Dynamic stretch pattern**: when wrapping a CollapsibleSection in a parent QVBoxLayout, connect `toggled` to `setStretchFactor(widget, 1 if expanded else 0)`. This lets sibling sections absorb freed space when one is collapsed. See `MainWindow._setup_ui` for Audio Sources + Recordings example.
+  - **Gotcha — all-collapsed case**: with only dynamic section stretches, collapsing every section leaves the layout with no claimant and Qt distributes the empty space oddly (centering one section, dropping the other to the bottom). Add a trailing `addStretch(0)` spacer and flip its stretch to 1 when no section is expanded, 0 otherwise — see `MainWindow._update_left_panel_stretch`.
 
 ## Left panel layout
 
