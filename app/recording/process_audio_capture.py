@@ -299,6 +299,99 @@ class ProcessAudioCapture:
             except Exception:
                 logger.exception("capture_lost callback raised")
 
+    def start(self, skip_stream_creation=False):
+        """Activate all streams in parallel, launch mixer thread.
+
+        Returns:
+            {"total": N, "active": K, "failures": {pid: error_name}}
+
+        The caller (DualAudioCapture) is expected to raise RuntimeError when
+        active == 0 AND the caller considers that a hard failure. This method
+        never raises for partial failures.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        if not skip_stream_creation:
+            # Real path: create ProcessCaptureStream instances for each pid.
+            self._streams = {
+                pid: ProcessCaptureStream(pid=pid, sample_rate=self.sample_rate)
+                for pid in self.pids
+            }
+
+        failures = {}
+        if self._streams:
+            with ThreadPoolExecutor(max_workers=max(len(self._streams), 1)) as ex:
+                futures = {
+                    pid: ex.submit(s.activate)
+                    for pid, s in self._streams.items()
+                }
+                for pid, fut in futures.items():
+                    try:
+                        ok = fut.result(timeout=6.0)
+                    except Exception as e:
+                        ok = False
+                        self._streams[pid].last_error = f"activation_exception: {e}"
+                    if not ok:
+                        failures[pid] = self._streams[pid].last_error or "unknown"
+
+        active_pids = {pid for pid, s in self._streams.items() if s.is_active}
+        self._active_last_tick = set(active_pids)
+
+        status = {
+            "total": len(self._streams),
+            "active": len(active_pids),
+            "failures": failures,
+        }
+        self.capture_status = status
+
+        # Launch the mixer only if at least one stream is active.
+        if active_pids:
+            self._running = True
+            self._thread = threading.Thread(target=self._mixer_loop, daemon=True)
+            self._thread.start()
+
+        return status
+
+    def stop(self):
+        """Stop the mixer thread and release all streams. Returns a result dict."""
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+        for s in self._streams.values():
+            try:
+                s.release()
+            except Exception:
+                logger.exception("Error releasing stream %s", s.pid)
+
+        mixed = (np.concatenate(self._all_chunks, axis=0)
+                 if self._all_chunks else np.array([], dtype=np.float32))
+
+        result = {
+            "mixed_audio": mixed,
+            "active_pids": self.active_pids,
+            "crashed": self._crashed,
+        }
+        return result
+
+    def save_to_file(self, filepath):
+        """Write buffered mixed audio to a WAV file. Returns the path, or None if empty."""
+        import soundfile as sf
+        if not self._all_chunks:
+            return None
+        data = np.concatenate(self._all_chunks, axis=0)
+        if data.size == 0:
+            return None
+        sf.write(str(filepath), data, self.sample_rate)
+        return str(filepath)
+
+    def get_audio_data(self):
+        """Return buffered mixed audio as a mono float32 array."""
+        if not self._all_chunks:
+            return np.array([], dtype=np.float32)
+        return np.concatenate(self._all_chunks, axis=0)
+
     @property
     def is_active(self):
         return self._running and any(s.is_active for s in self._streams.values())

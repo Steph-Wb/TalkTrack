@@ -333,5 +333,83 @@ class TestProcessAudioCaptureSignals(unittest.TestCase):
         self.assertEqual(set(lost_events), {1, 2})
 
 
+class TestProcessAudioCaptureStart(unittest.TestCase):
+    def test_start_returns_status_dict_all_success(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        cap = ProcessAudioCapture(pids=[1, 2], sample_rate=16000)
+        # Inject fake streams before start.
+        cap._streams = {
+            1: FakeStream(pid=1, activate_result=True),
+            2: FakeStream(pid=2, activate_result=True),
+        }
+        status = cap.start(skip_stream_creation=True)
+        try:
+            self.assertEqual(status["total"], 2)
+            self.assertEqual(status["active"], 2)
+            self.assertEqual(status["failures"], {})
+        finally:
+            cap.stop()
+
+    def test_start_tolerates_partial_failures(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        cap = ProcessAudioCapture(pids=[1, 2, 3], sample_rate=16000)
+        cap._streams = {
+            1: FakeStream(pid=1, activate_result=True),
+            2: FakeStream(pid=2, activate_result=False, error="AUDCLNT_E_DEVICE_INVALIDATED"),
+            3: FakeStream(pid=3, activate_result=True),
+        }
+        status = cap.start(skip_stream_creation=True)
+        try:
+            self.assertEqual(status["total"], 3)
+            self.assertEqual(status["active"], 2)
+            self.assertEqual(status["failures"], {2: "AUDCLNT_E_DEVICE_INVALIDATED"})
+        finally:
+            cap.stop()
+
+    def test_start_zero_active_still_returns_status(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        cap = ProcessAudioCapture(pids=[1], sample_rate=16000)
+        cap._streams = {
+            1: FakeStream(pid=1, activate_result=False, error="E_ACCESSDENIED"),
+        }
+        status = cap.start(skip_stream_creation=True)
+        try:
+            self.assertEqual(status["active"], 0)
+            self.assertEqual(status["failures"], {1: "E_ACCESSDENIED"})
+        finally:
+            cap.stop()
+
+    def test_stop_releases_all_streams_and_joins_thread(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        cap = ProcessAudioCapture(pids=[1], sample_rate=16000)
+        fs = FakeStream(pid=1, activate_result=True)
+        cap._streams = {1: fs}
+        cap.start(skip_stream_creation=True)
+        result = cap.stop()
+        self.assertTrue(fs.released)
+        self.assertIn("mixed_audio", result)
+        self.assertFalse(cap._running)
+
+    def test_save_to_file_writes_when_buffer_enabled(self):
+        import tempfile, os
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        cap = ProcessAudioCapture(pids=[1], sample_rate=16000)
+        cap._all_chunks = [np.ones(16000, dtype=np.float32)]
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "out.wav")
+            result = cap.save_to_file(path)
+            self.assertTrue(os.path.exists(path))
+            self.assertEqual(result, path)
+
+    def test_save_to_file_returns_none_when_no_data(self):
+        import tempfile, os
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        cap = ProcessAudioCapture(pids=[1], sample_rate=16000)
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "out.wav")
+            self.assertIsNone(cap.save_to_file(path))
+            self.assertFalse(os.path.exists(path))
+
+
 if __name__ == "__main__":
     unittest.main()
