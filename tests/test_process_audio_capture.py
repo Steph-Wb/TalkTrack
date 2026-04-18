@@ -276,5 +276,62 @@ class TestProcessAudioCaptureMixer(unittest.TestCase):
         self.assertEqual(len(cap._all_chunks), 0)
 
 
+class TestProcessAudioCaptureSignals(unittest.TestCase):
+    def _wait_for(self, predicate, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.005)
+        return False
+
+    def test_pid_lost_fires_once_per_stream_death(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        lost = []
+        a = FakeStream(pid=1, queued_chunks=[np.ones(160, dtype=np.float32)])
+        b = FakeStream(pid=2, queued_chunks=[np.ones(160, dtype=np.float32)])
+        cap = ProcessAudioCapture(
+            pids=[1, 2], sample_rate=16000,
+            pid_lost_callback=lambda pid, err: lost.append((pid, err)),
+        )
+        cap._streams = {1: a, 2: b}
+        cap._active_last_tick = {1, 2}
+        cap._running = True
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        # Let one mix tick happen, then kill stream 1.
+        self._wait_for(lambda: len(a._queue) == 0)
+        a.die("device_invalidated")
+        self._wait_for(lambda: len(lost) >= 1)
+        cap._running = False
+        t.join(timeout=1)
+        self.assertEqual(len([e for e in lost if e[0] == 1]), 1)
+        self.assertEqual(lost[0][1], "device_invalidated")
+
+    def test_capture_lost_fires_once_when_all_die(self):
+        from app.recording.process_audio_capture import ProcessAudioCapture
+        lost_events = []
+        capture_lost_events = []
+        a = FakeStream(pid=1, queued_chunks=[])
+        b = FakeStream(pid=2, queued_chunks=[])
+        cap = ProcessAudioCapture(
+            pids=[1, 2], sample_rate=16000,
+            pid_lost_callback=lambda pid, err: lost_events.append(pid),
+            capture_lost_callback=lambda: capture_lost_events.append(True),
+        )
+        cap._streams = {1: a, 2: b}
+        cap._active_last_tick = {1, 2}
+        cap._running = True
+        a.die("err_a")
+        b.die("err_b")
+        t = threading.Thread(target=cap._mixer_loop, daemon=True)
+        t.start()
+        self._wait_for(lambda: len(capture_lost_events) >= 1, timeout=1.0)
+        cap._running = False
+        t.join(timeout=1)
+        self.assertEqual(len(capture_lost_events), 1)
+        self.assertEqual(set(lost_events), {1, 2})
+
+
 if __name__ == "__main__":
     unittest.main()
