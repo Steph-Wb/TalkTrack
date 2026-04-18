@@ -7,8 +7,10 @@ and mixing the results into a single output stream.
 """
 import threading
 import time
+from math import gcd
 import numpy as np
 import soundfile as sf
+from scipy.signal import resample_poly
 
 from app.utils.platform_info import is_windows_11
 
@@ -52,6 +54,45 @@ def _convert_dtype(raw_bytes, format_tag, bits_per_sample):
         samples = np.frombuffer(raw_bytes, dtype=np.int32).astype(np.float32)
         return (samples / 256.0) / 8388608.0   # >>8 then /2^23
     raise ValueError(f"Unsupported format_tag: {format_tag!r}")
+
+
+class _Resampler:
+    """Polyphase resampler that accumulates odd-length inputs across calls.
+
+    resample_poly produces cleanest output when the input length is a multiple
+    of `down`. We buffer the remainder across calls so short packets (common
+    when WASAPI hands over partial ticks) don't introduce clicks at boundaries.
+    """
+
+    def __init__(self, native_rate, target_rate):
+        self.native_rate = native_rate
+        self.target_rate = target_rate
+        g = gcd(native_rate, target_rate)
+        self._up = target_rate // g
+        self._down = native_rate // g
+        self._buf = np.array([], dtype=np.float32)
+
+    def push(self, arr):
+        """Append arr to the internal buffer, resample a multiple of down, return it."""
+        if arr.size == 0 and self._buf.size == 0:
+            return np.array([], dtype=np.float32)
+        if self._up == self._down:
+            # Passthrough fast path.
+            if self._buf.size > 0:
+                out = np.concatenate([self._buf, arr])
+                self._buf = np.array([], dtype=np.float32)
+                return out
+            return arr.astype(np.float32, copy=False)
+
+        combined = np.concatenate([self._buf, arr]) if self._buf.size else arr
+        # Take the largest multiple of down; carry the rest.
+        usable = (len(combined) // self._down) * self._down
+        if usable == 0:
+            self._buf = combined
+            return np.array([], dtype=np.float32)
+        chunk = combined[:usable]
+        self._buf = combined[usable:]
+        return resample_poly(chunk, self._up, self._down).astype(np.float32)
 
 
 def mix_audio_chunks(chunks):

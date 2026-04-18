@@ -80,5 +80,44 @@ class TestConvertDtype(unittest.TestCase):
             _convert_dtype(b"\x00", format_tag="mu-law", bits_per_sample=8)
 
 
+class TestResampler(unittest.TestCase):
+    def test_48k_to_16k_sine_frequency_preserved(self):
+        """The chipmunk-bug guard: 440 Hz in must be 440 Hz out, not 1320."""
+        from app.recording.process_audio_capture import _Resampler
+        rs = _Resampler(native_rate=48000, target_rate=16000)
+        t = np.linspace(0, 1.0, 48000, endpoint=False)
+        sine = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+        out = rs.push(sine)
+        self.assertEqual(len(out), 16000)  # 1 second at 16 kHz
+        # FFT peak
+        fft = np.abs(np.fft.rfft(out))
+        peak_bin = int(np.argmax(fft))
+        peak_hz = peak_bin * (16000 / len(out))
+        self.assertAlmostEqual(peak_hz, 440, delta=2)
+
+    def test_non_multiple_length_carries_residual(self):
+        from app.recording.process_audio_capture import _Resampler
+        rs = _Resampler(native_rate=48000, target_rate=16000)
+        # 100 samples at 48 kHz is not a multiple of down=3 → residual of 1
+        first = rs.push(np.zeros(100, dtype=np.float32))
+        # next push of 200 samples: buffer holds 1 + 200 = 201 → 67 output frames, 0 residual
+        second = rs.push(np.zeros(200, dtype=np.float32))
+        self.assertEqual(len(first), 33)   # 99 / 3
+        self.assertEqual(len(second), 67)  # 201 / 3
+
+    def test_passthrough_when_rates_match(self):
+        from app.recording.process_audio_capture import _Resampler
+        rs = _Resampler(native_rate=16000, target_rate=16000)
+        data = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+        out = rs.push(data)
+        np.testing.assert_array_almost_equal(out, data)
+
+    def test_empty_push_returns_empty(self):
+        from app.recording.process_audio_capture import _Resampler
+        rs = _Resampler(native_rate=48000, target_rate=16000)
+        out = rs.push(np.array([], dtype=np.float32))
+        self.assertEqual(len(out), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
