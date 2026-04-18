@@ -46,12 +46,11 @@ class TestConstants(unittest.TestCase):
         from app.recording._process_com import AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
         self.assertEqual(AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, 1)
 
-    def test_virtual_device_string_is_guid_format(self):
+    def test_virtual_device_path_matches_windows_sdk(self):
         from app.recording._process_com import VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK
-        # Braced GUID string, 38 chars total.
-        self.assertEqual(len(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK), 38)
-        self.assertTrue(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK.startswith("{"))
-        self.assertTrue(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK.endswith("}"))
+        # Per mmdeviceapi.h: #define VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK L"VAD\\Process_Loopback"
+        # This is the literal device-interface-path string, not a GUID.
+        self.assertEqual(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, "VAD\\Process_Loopback")
 
     def test_audclnt_streamflags_loopback_value(self):
         from app.recording._process_com import AUDCLNT_STREAMFLAGS_LOOPBACK

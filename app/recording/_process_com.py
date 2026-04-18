@@ -58,7 +58,12 @@ def hresult_name(hr):
 
 # --- Constants from audioclient.h / audioclientactivationparams.h ---
 
-VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = "{8FDC6FBC-56CC-4DA6-B4FA-9CB9F1E09B72}"
+# Virtual audio device path for per-process loopback. Per mmdeviceapi.h:
+#   #define VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK L"VAD\\Process_Loopback"
+# It is a device-interface-path string, NOT a GUID. ActivateAudioInterfaceAsync
+# recognizes this literal. Passing a GUID string here returns an obscure
+# MMDevAPI failure (0x8000000E) — been there, done that.
+VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = "VAD\\Process_Loopback"
 
 AUDIOCLIENT_ACTIVATION_TYPE_DEFAULT = 0
 AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK = 1
