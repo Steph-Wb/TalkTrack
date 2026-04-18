@@ -72,6 +72,13 @@ class SettingsDialog(QDialog):
         )
         recording_form.addRow(self.mic_mute_on_start_cb)
 
+        self.minimize_to_tray_cb = QCheckBox("When minimized, hide to system tray")
+        self.minimize_to_tray_cb.setToolTip(
+            "Keeps TalkTrack out of the taskbar when minimized.\n"
+            "Right-click the tray icon to restore or stop recording."
+        )
+        recording_form.addRow(self.minimize_to_tray_cb)
+
         general_layout.addWidget(recording_group)
         general_layout.addStretch()
 
@@ -344,6 +351,7 @@ class SettingsDialog(QDialog):
         self.silence_auto_stop_cb.setChecked(self.config.get("general", "silence_auto_stop"))
         self.silence_duration_spin.setValue(self.config.get("general", "silence_duration"))
         self.mic_mute_on_start_cb.setChecked(self.config.get("audio", "mic_mute_on_start"))
+        self.minimize_to_tray_cb.setChecked(self.config.get("general", "minimize_to_tray"))
 
         # Audio
         sr = self.config.get("audio", "sample_rate")
@@ -430,6 +438,7 @@ class SettingsDialog(QDialog):
         self.config.set("general", "silence_auto_stop", self.silence_auto_stop_cb.isChecked())
         self.config.set("general", "silence_duration", self.silence_duration_spin.value())
         self.config.set("audio", "mic_mute_on_start", self.mic_mute_on_start_cb.isChecked())
+        self.config.set("general", "minimize_to_tray", self.minimize_to_tray_cb.isChecked())
 
         self.config.set("audio", "sample_rate", self.sample_rate_combo.currentData())
         self.config.set("audio", "channels", self.channels_combo.currentData())
