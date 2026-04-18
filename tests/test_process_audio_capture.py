@@ -11,14 +11,6 @@ class TestMiscHelpers(unittest.TestCase):
         mono = stereo_to_mono(stereo)
         np.testing.assert_array_almost_equal(mono, [0.5, 0.5])
 
-    def test_process_capture_stream_init(self):
-        from app.recording.process_audio_capture import ProcessCaptureStream
-        stream = ProcessCaptureStream(pid=12345, sample_rate=16000)
-        self.assertEqual(stream.pid, 12345)
-        self.assertEqual(stream.sample_rate, 16000)
-        self.assertFalse(stream.is_active)
-
-
 class TestTrimAndMix(unittest.TestCase):
     def test_trim_to_shortest_and_mean_mix(self):
         from app.recording.process_audio_capture import _trim_and_mix
@@ -409,6 +401,48 @@ class TestProcessAudioCaptureStart(unittest.TestCase):
             path = os.path.join(td, "out.wav")
             self.assertIsNone(cap.save_to_file(path))
             self.assertFalse(os.path.exists(path))
+
+
+class TestProcessCaptureStreamActivate(unittest.TestCase):
+    def test_activate_success_sets_active_and_format(self):
+        from app.recording.process_audio_capture import ProcessCaptureStream
+
+        def fake_activate(pid, timeout_ms=5000):
+            # Return a sentinel AudioClient + S_OK. Also attach a format.
+            client = type("C", (), {})()
+            client.native_rate = 48000
+            client.native_channels = 2
+            client.native_format = "float32"
+            return client, 0
+
+        s = ProcessCaptureStream(pid=1234, sample_rate=16000,
+                                 activator=fake_activate)
+        self.assertTrue(s.activate())
+        self.assertTrue(s.is_active)
+        self.assertEqual(s.native_rate, 48000)
+        self.assertEqual(s.native_channels, 2)
+        self.assertEqual(s.native_format, "float32")
+        self.assertIsNone(s.last_error)
+
+    def test_activate_failure_returns_false_with_error(self):
+        from app.recording.process_audio_capture import ProcessCaptureStream
+
+        def fake_activate(pid, timeout_ms=5000):
+            return None, 0x80070005   # E_ACCESSDENIED
+
+        s = ProcessCaptureStream(pid=1234, sample_rate=16000,
+                                 activator=fake_activate)
+        self.assertFalse(s.activate())
+        self.assertFalse(s.is_active)
+        self.assertEqual(s.last_error, "E_ACCESSDENIED")
+
+    def test_release_is_idempotent(self):
+        from app.recording.process_audio_capture import ProcessCaptureStream
+        s = ProcessCaptureStream(pid=1234, sample_rate=16000,
+                                 activator=lambda pid, timeout_ms=5000: (None, 0x80004005))
+        s.activate()
+        s.release()
+        s.release()   # no raise
 
 
 if __name__ == "__main__":

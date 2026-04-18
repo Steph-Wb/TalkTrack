@@ -14,6 +14,10 @@ import soundfile as sf
 from scipy.signal import resample_poly
 
 from app.utils.platform_info import is_windows_11
+from app.recording._process_com import (
+    activate_process_loopback as _default_activator,
+    hresult_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,73 +132,68 @@ class _Resampler:
 
 
 class ProcessCaptureStream:
-    """Captures audio from a single process by PID using Win11 COM API.
+    """Captures audio from a single process. Owns the COM objects.
 
-    Uses ActivateAudioInterfaceAsync with AUDIOCLIENT_ACTIVATION_PARAMS
-    to capture loopback audio from a specific process. The actual COM
-    capture loop (_read_audio_packets) is a placeholder until the
-    full COM interop is implemented.
+    activate/read/release is synchronous and non-thread-owning — the caller
+    (ProcessAudioCapture) provides the single polling thread. Keeping this
+    class stateless re: threading makes it easy to unit-test with fakes.
     """
 
-    def __init__(self, pid, sample_rate=16000, channels=1):
+    def __init__(self, pid, sample_rate=16000, activator=None):
         self.pid = pid
         self.sample_rate = sample_rate
-        self.channels = channels
-        self._recording = False
-        self._paused = False
-        self._all_chunks = []
-        self._thread = None
-        self._lock = threading.Lock()
+        self.is_active = False
+        self.native_rate = 0
+        self.native_channels = 0
+        self.native_format = "float32"
+        self.last_error = None
+        self._client = None
+        self._capture_client = None
+        self._resampler = None
+        self._pre_resample_buf = np.array([], dtype=np.float32)
+        self._post_mix_tail = np.array([], dtype=np.float32)
+        self._activator = activator if activator is not None else _default_activator
 
-    def start(self):
-        """Start capturing audio from the target process."""
-        if not is_windows_11():
-            raise RuntimeError(
-                "Per-process audio capture requires Windows 11 (Build 22000+)"
-            )
-        self._recording = True
-        self._paused = False
-        self._all_chunks = []
-        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._thread.start()
+    def activate(self):
+        """Synchronously activate the per-process audio client.
 
-    def pause(self):
-        """Pause audio capture (stops storing chunks)."""
-        self._paused = True
+        Returns True on success, False on any failure. On failure, last_error
+        holds the HRESULT name (never raises).
+        """
+        try:
+            client, hr = self._activator(self.pid)
+        except Exception as e:
+            self.last_error = f"activation_exception: {e}"
+            return False
 
-    def resume(self):
-        """Resume audio capture after pause."""
-        self._paused = False
+        if hr != 0 or client is None:
+            self.last_error = hresult_name(hr) if hr != 0 else "activation_null_client"
+            return False
 
-    def stop(self):
-        """Stop capturing and wait for background thread to finish."""
-        self._recording = False
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
+        self._client = client
+        # The activator may attach format hints to the client (real COM path
+        # queries these from the negotiated format; fakes set them directly).
+        self.native_rate = getattr(client, "native_rate", 48000)
+        self.native_channels = getattr(client, "native_channels", 2)
+        self.native_format = getattr(client, "native_format", "float32")
+        self._resampler = _Resampler(self.native_rate, self.sample_rate)
+        self.is_active = True
+        return True
 
-    def get_audio_data(self):
-        """Return all captured audio as a mono numpy array."""
-        with self._lock:
-            if not self._all_chunks:
-                return np.array([], dtype=np.float32)
-            data = np.concatenate(self._all_chunks, axis=0)
-        if data.ndim > 1:
-            data = stereo_to_mono(data)
-        return data
+    def put_back_tail(self, tail):
+        if tail.size > 0:
+            if self._post_mix_tail.size:
+                self._post_mix_tail = np.concatenate([self._post_mix_tail, tail])
+            else:
+                self._post_mix_tail = tail
 
-    def save_to_file(self, filepath):
-        """Save captured audio to a WAV file."""
-        data = self.get_audio_data()
-        if data.size == 0:
-            return None
-        sf.write(str(filepath), data, self.sample_rate)
-        return str(filepath)
-
-    @property
-    def is_active(self):
-        """Whether the capture stream is currently recording."""
-        return self._recording
+    def release(self):
+        self.is_active = False
+        self._client = None
+        self._capture_client = None
+        self._resampler = None
+        self._pre_resample_buf = np.array([], dtype=np.float32)
+        self._post_mix_tail = np.array([], dtype=np.float32)
 
 
 class ProcessAudioCapture:
