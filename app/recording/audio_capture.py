@@ -250,7 +250,7 @@ class DualAudioCapture:
         self.loopback_device = loopback_device
         self.mic_stream = None
         self.mic_stream_2 = None
-        self.loopback_stream = None
+        self.system_stream = None
         self._recording = False
         self._start_time = None
         self._elapsed = 0
@@ -362,15 +362,15 @@ class DualAudioCapture:
                         self._system_level_callback(chunk)
                     self._check_silence(chunk)
 
-                self.loopback_stream = LoopbackStream(
+                self.system_stream = LoopbackStream(
                     device_name=device_name,
                     sample_rate=self.sample_rate,
                     level_callback=_system_cb,
                 )
-                self.loopback_stream.start()
+                self.system_stream.start()
             except Exception as e:
                 logger.error("Failed to start system audio capture: %s", e)
-                self.loopback_stream = None
+                self.system_stream = None
         else:
             logger.warning("No system audio device selected")
 
@@ -382,8 +382,8 @@ class DualAudioCapture:
             self.mic_stream.pause()
         if self.mic_stream_2:
             self.mic_stream_2.pause()
-        if self.loopback_stream:
-            self.loopback_stream.pause()
+        if self.system_stream:
+            self.system_stream.pause()
         if self._start_time:
             self._elapsed += time.time() - self._start_time
             self._start_time = None
@@ -394,8 +394,8 @@ class DualAudioCapture:
             self.mic_stream.resume()
         if self.mic_stream_2:
             self.mic_stream_2.resume()
-        if self.loopback_stream:
-            self.loopback_stream.resume()
+        if self.system_stream:
+            self.system_stream.resume()
         self._start_time = time.time()
         self._silent_since = None
         self._silence_fired = False  # allow re-detection after resume
@@ -421,10 +421,10 @@ class DualAudioCapture:
             sf.write(str(mic_path), mic_data, self.sample_rate)
             results["mic"] = str(mic_path)
 
-        if self.loopback_stream:
-            self.loopback_stream.stop()
+        if self.system_stream:
+            self.system_stream.stop()
             sys_path = self.output_dir / "system_audio.wav"
-            results["system"] = self.loopback_stream.save_to_file(sys_path)
+            results["system"] = self.system_stream.save_to_file(sys_path)
 
         # Create combined audio for transcription
         combined = self._create_combined_audio()
@@ -472,7 +472,7 @@ class DualAudioCapture:
     def _create_combined_audio(self):
         """Mix mic and system audio into a single track."""
         mic_data = self._get_mixed_mic_data()
-        sys_data = self.loopback_stream.get_audio_data() if self.loopback_stream else np.array([])
+        sys_data = self.system_stream.get_audio_data() if self.system_stream else np.array([])
 
         if mic_data.size == 0 and sys_data.size == 0:
             return None
