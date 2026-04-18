@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         self._really_quit = False
         self._success_pending = False
         self._error_pending = False
+        self._current_capture_failures = {}
 
         self.tray = TrayIcon(self)
         if self.tray.is_supported():
@@ -281,6 +282,9 @@ class MainWindow(QMainWindow):
         self.source_selector.apps_went_inactive.connect(self._on_apps_went_inactive)
         self.source_selector.apps_became_active.connect(self._on_apps_became_active)
         self.recorder.silence_detected.connect(self._on_silence_detected)
+        self.recorder.capture_status.connect(self._on_capture_status)
+        self.recorder.pid_lost.connect(self._on_pid_lost)
+        self.recorder.capture_lost.connect(self._on_capture_lost)
 
         # Recording header
         self.recording_header.name_changed.connect(self._on_recording_renamed)
@@ -436,6 +440,8 @@ class MainWindow(QMainWindow):
             self.meters_panel.reset()
             self._mic_muted = False
             self.waveform.set_mic_muted(False)
+            self._current_capture_failures = {}
+            self.source_selector.mark_capture_failures({})
 
     def _on_recording_tick(self, seconds):
         if hasattr(self, "tray") and self.tray.is_supported():
@@ -810,6 +816,41 @@ class MainWindow(QMainWindow):
             self._flag_error_notification()
         else:
             QMessageBox.critical(self, "Error", error_msg)
+
+    def _on_capture_status(self, status):
+        """Render initial 'K of N apps capturing' feedback after Record start."""
+        total = status.get("total", 0)
+        active = status.get("active", 0)
+        failures = status.get("failures", {})
+        self._current_capture_failures = dict(failures)
+        self.source_selector.mark_capture_failures(self._current_capture_failures)
+        if total > 0 and active < total and active > 0:
+            self.status_label.setText(
+                f"Recording — capturing {active} of {total} apps"
+            )
+
+    def _on_pid_lost(self, pid, error):
+        """One PID died during recording. Update the warning label + status bar."""
+        if not hasattr(self, "_current_capture_failures"):
+            self._current_capture_failures = {}
+        self._current_capture_failures[pid] = error
+        self.source_selector.mark_capture_failures(self._current_capture_failures)
+        active = len(self.recorder._capture.system_stream.active_pids) \
+            if self.recorder._capture and self.recorder._capture.system_stream else 0
+        total = active + len(self._current_capture_failures)
+        if active > 0:
+            self.status_label.setText(
+                f"Recording — capturing {active} of {total} apps"
+            )
+
+    def _on_capture_lost(self):
+        """All selected apps became unavailable. Stop and save what we have."""
+        if self.recorder.state not in (RecordingState.RECORDING, RecordingState.PAUSED):
+            return
+        self.status_label.setText(
+            "Capture ended: all selected apps became unavailable"
+        )
+        self.recorder.stop_recording()
 
     def _restore_from_tray(self):
         self.showNormal()
