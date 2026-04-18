@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTabWidget, QMenuBar, QStatusBar, QMessageBox, QLabel
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QAction
 
 from app.utils.config import Config
@@ -974,6 +974,19 @@ class MainWindow(QMainWindow):
             path = Path(self._current_session["directory"]) / "action_items.json"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(items, f, indent=2)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.WindowStateChange:
+            if self.windowState() & Qt.WindowState.WindowMinimized:
+                if self.config.get("general", "minimize_to_tray") and self.tray.is_supported():
+                    self.setWindowState(Qt.WindowState.WindowNoState)
+                    self.hide()
+                    if self.config.get("general", "show_tray_hint"):
+                        self.tray.show_hint_balloon()
+                        self.config.set("general", "show_tray_hint", False)
+                    event.accept()
+                    return
+        super().changeEvent(event)
 
     def closeEvent(self, event):
         if self._gain_save_timer.isActive():
