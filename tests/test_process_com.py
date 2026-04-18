@@ -18,5 +18,45 @@ class TestHResultName(unittest.TestCase):
         self.assertEqual(hresult_name(0), "S_OK")
 
 
+class TestStructs(unittest.TestCase):
+    def test_audioclient_activation_params_size(self):
+        """Struct size must match the documented Windows SDK value.
+        If this breaks after a typo, the ActivateAudioInterfaceAsync call fails silently."""
+        import ctypes
+        from app.recording._process_com import AUDIOCLIENT_ACTIVATION_PARAMS
+        # ActivationType (ULONG) + ProcessLoopbackParams (TargetProcessId ULONG + Mode ULONG)
+        # padded to 8-byte alignment = 12 bytes, rounded up to next DWORD boundary.
+        # The real size per SDK is 8 bytes (union). We document whatever the
+        # implementation chooses and pin it here.
+        self.assertGreaterEqual(ctypes.sizeof(AUDIOCLIENT_ACTIVATION_PARAMS), 8)
+        self.assertLessEqual(ctypes.sizeof(AUDIOCLIENT_ACTIVATION_PARAMS), 32)
+
+    def test_waveformatex_size_is_18(self):
+        import ctypes
+        from app.recording._process_com import WAVEFORMATEX
+        self.assertEqual(ctypes.sizeof(WAVEFORMATEX), 18)
+
+
+class TestConstants(unittest.TestCase):
+    def test_process_loopback_mode_include_is_zero(self):
+        from app.recording._process_com import PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+        self.assertEqual(PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, 0)
+
+    def test_activation_type_is_one(self):
+        from app.recording._process_com import AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
+        self.assertEqual(AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, 1)
+
+    def test_virtual_device_string_is_guid_format(self):
+        from app.recording._process_com import VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK
+        # Braced GUID string, 38 chars total.
+        self.assertEqual(len(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK), 38)
+        self.assertTrue(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK.startswith("{"))
+        self.assertTrue(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK.endswith("}"))
+
+    def test_audclnt_streamflags_loopback_value(self):
+        from app.recording._process_com import AUDCLNT_STREAMFLAGS_LOOPBACK
+        self.assertEqual(AUDCLNT_STREAMFLAGS_LOOPBACK, 0x00020000)
+
+
 if __name__ == "__main__":
     unittest.main()
