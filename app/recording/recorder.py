@@ -30,6 +30,9 @@ class Recorder(QObject):
     mic_level = pyqtSignal(object)
     system_level = pyqtSignal(object)
     silence_detected = pyqtSignal(float)  # seconds of silence
+    capture_status = pyqtSignal(dict)   # {"total": N, "active": K, "failures": {pid: str}}
+    pid_lost = pyqtSignal(int, str)     # (pid, hresult_name)
+    capture_lost = pyqtSignal()
 
     def __init__(self, config):
         super().__init__()
@@ -94,8 +97,15 @@ class Recorder(QObject):
                 callback=lambda secs: self.silence_detected.emit(secs),
             )
 
+        self._capture.set_capture_event_callbacks(
+            pid_lost=lambda pid, err: self.pid_lost.emit(pid, err),
+            capture_lost=lambda: self.capture_lost.emit(),
+        )
+
         try:
             self._capture.start(session_dir)
+            if self._capture._capture_status is not None:
+                self.capture_status.emit(self._capture._capture_status)
             self._set_state(RecordingState.RECORDING)
             self._start_timer()
         except Exception as e:
@@ -127,6 +137,8 @@ class Recorder(QObject):
 
             duration = self._capture.get_elapsed_time()
             self._current_session["stopped_at"] = datetime.now().isoformat()
+            if self._capture._capture_status is not None:
+                self._current_session["capture_status"] = self._capture._capture_status
             self._current_session["duration"] = duration
             self._current_session["audio_files"] = audio_files
 
