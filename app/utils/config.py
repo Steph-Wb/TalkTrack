@@ -49,6 +49,8 @@ DEFAULT_CONFIG = {
         "auto_record": False,
         "silence_auto_stop": True,
         "silence_duration": 30,
+        "minimize_to_tray": False,
+        "show_tray_hint": True,
     },
     "ui": {
         "theme": "dark",
