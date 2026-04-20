@@ -49,6 +49,10 @@ class SourceSelector(QWidget):
     """
 
     devices_changed = pyqtSignal()
+    # Emitted when the user picks a different mic in the dropdown.
+    # Payload is the new device index (or None for "don't record mic").
+    # Not emitted during refresh_devices — signals are blocked there.
+    mic_changed = pyqtSignal(object)
     # Emitted when all checked apps go inactive during recording
     apps_went_inactive = pyqtSignal()
     # Emitted when a checked app becomes active (for auto-record)
@@ -475,12 +479,12 @@ class SourceSelector(QWidget):
 
     def _save_mic_selection(self):
         """Persist mic choices immediately when the user changes a dropdown."""
-        if not self._config:
-            return
-        mic1_text = self.mic_combo.currentText() if self.mic_combo.currentData() is not None else ""
-        self._config.set("audio", "last_mic", mic1_text)
-        mic2_text = self.mic2_combo.currentText() if self.mic2_combo.currentData() is not None else ""
-        self._config.set("audio", "last_mic2", mic2_text)
+        if self._config:
+            mic1_text = self.mic_combo.currentText() if self.mic_combo.currentData() is not None else ""
+            self._config.set("audio", "last_mic", mic1_text)
+            mic2_text = self.mic2_combo.currentText() if self.mic2_combo.currentData() is not None else ""
+            self._config.set("audio", "last_mic2", mic2_text)
+        self.mic_changed.emit(self.mic_combo.currentData())
 
     def save_capture_settings(self):
         """Save current capture mode, selected app names, and mic choices to config."""

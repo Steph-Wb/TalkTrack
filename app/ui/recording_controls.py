@@ -18,6 +18,9 @@ class RecordingControls(QWidget):
     pause_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
     mute_clicked = pyqtSignal()
+    # Emitted when the user toggles the Test Mic button. True = enable live
+    # mic monitor (no recording); False = disable. Off by default every launch.
+    test_mic_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -60,6 +63,17 @@ class RecordingControls(QWidget):
         self.mute_btn.clicked.connect(self.mute_clicked.emit)
         btn_row.addWidget(self.mute_btn)
 
+        self.test_mic_btn = QPushButton("\U0001f399 Test")
+        self.test_mic_btn.setObjectName("testMicButton")
+        self.test_mic_btn.setCheckable(True)
+        self.test_mic_btn.setToolTip(
+            "Open the mic and drive the meters without recording. "
+            "Resets off every launch."
+        )
+        self.test_mic_btn.toggled.connect(self._update_test_mic_style)
+        self.test_mic_btn.toggled.connect(self.test_mic_toggled.emit)
+        btn_row.addWidget(self.test_mic_btn)
+
         layout.addLayout(btn_row)
 
         # Row 2: Indicator + timer
@@ -89,6 +103,7 @@ class RecordingControls(QWidget):
             self.stop_btn.setEnabled(False)
             self.mute_btn.setEnabled(False)
             self.set_muted(False)
+            self.test_mic_btn.setEnabled(True)
             self.recording_indicator.setText("")
             self._blink_timer.stop()
         elif state == RecordingState.RECORDING:
@@ -97,6 +112,7 @@ class RecordingControls(QWidget):
             self.pause_btn.setText("\u23f8 Pause")
             self.stop_btn.setEnabled(True)
             self.mute_btn.setEnabled(True)
+            self.test_mic_btn.setEnabled(False)
             self._blink_timer.start(500)
         elif state == RecordingState.PAUSED:
             self.record_btn.setEnabled(False)
@@ -104,6 +120,7 @@ class RecordingControls(QWidget):
             self.pause_btn.setText("\u25b6 Resume")
             self.stop_btn.setEnabled(True)
             self.mute_btn.setEnabled(True)
+            self.test_mic_btn.setEnabled(False)
             self.recording_indicator.setText("\u23f8")
             self._blink_timer.stop()
         elif state == RecordingState.STOPPING:
@@ -111,6 +128,7 @@ class RecordingControls(QWidget):
             self.pause_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
             self.mute_btn.setEnabled(False)
+            self.test_mic_btn.setEnabled(False)
             self.recording_indicator.setText("")
             self._blink_timer.stop()
 
@@ -119,6 +137,29 @@ class RecordingControls(QWidget):
         m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
         self.timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
+
+    def _update_test_mic_style(self, checked):
+        if checked:
+            self.test_mic_btn.setText("\U0001f399 Testing")
+            self.test_mic_btn.setStyleSheet(
+                "QPushButton#testMicButton { "
+                "background-color: #a6e3a1; color: #1e1e2e; "
+                "border: 1px solid #a6e3a1; font-weight: bold; }"
+            )
+        else:
+            self.test_mic_btn.setText("\U0001f399 Test")
+            self.test_mic_btn.setStyleSheet("")
+
+    def clear_test_mic(self):
+        """Uncheck the Test Mic button without emitting test_mic_toggled.
+
+        Used when MainWindow has already torn down the monitor (e.g. before
+        starting a recording) and just needs the visual state to match.
+        """
+        self.test_mic_btn.blockSignals(True)
+        self.test_mic_btn.setChecked(False)
+        self.test_mic_btn.blockSignals(False)
+        self._update_test_mic_style(False)
 
     def set_muted(self, muted):
         """Update the mute button visual state."""

@@ -8,11 +8,11 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
-from app.ui.level_meter import DB_FLOOR, compute_rms_db
+from app.ui.level_meter import DB_FLOOR
 
 
 # dB reference points shown as tick marks on the scale
-DB_TICKS = [0, -6, -18, -40, -60]
+DB_TICKS = [0, -18, -40, -60]
 
 # Peak/clip timing
 PEAK_HOLD_SECONDS = 1.5
@@ -99,8 +99,15 @@ class _VerticalMeter(QWidget):
 
     def update_from_chunk(self, chunk: np.ndarray):
         now = time.monotonic()
-        self._db = compute_rms_db(chunk)
         current = chunk_max_abs(chunk)
+        # Bar fills to the peak-sample dB so the hold line sits AT the bar's
+        # top when rising, and only floats above during the hold/decay phase.
+        # RMS here would bias the bar several dB below the hold line even
+        # when the signal is steady, which reads as "the line doesn't match."
+        if current < 1e-10:
+            self._db = DB_FLOOR
+        else:
+            self._db = max(20.0 * float(np.log10(current)), DB_FLOOR)
         self._peak_abs, self._peak_ts = peak_hold_value(
             current, self._peak_abs, self._peak_ts, now,
         )
@@ -155,9 +162,13 @@ class _VerticalMeter(QWidget):
             peak_y_draw = min(peak_y, h - 2)
             painter.drawLine(0, peak_y_draw, w, peak_y_draw)
 
-        # 0 dB clip line
-        painter.setPen(QPen(QColor("#f38ba8"), 1))
-        painter.drawLine(0, 0, w, 0)
+        # 2px outline so the channel is visible even when silent.
+        # Drawn last so it overdraws any fills at the extreme edges.
+        border = QColor("#313244")
+        painter.fillRect(0, 0, w, 2, border)
+        painter.fillRect(0, h - 2, w, 2, border)
+        painter.fillRect(0, 0, 2, h, border)
+        painter.fillRect(w - 2, 0, 2, h, border)
 
         painter.end()
 
@@ -175,16 +186,21 @@ class _DbScale(QWidget):
         painter.fillRect(0, 0, self.width(), self.height(), QColor("#1e1e2e"))
 
         font = QFont()
-        font.setPixelSize(9)
+        font.setPixelSize(11)
         painter.setFont(font)
         painter.setPen(QColor("#a6adc8"))
 
         h = self.height()
+        text_h = 16
         for db in DB_TICKS:
             y = _db_to_y(db, h)
             label = str(db)
-            painter.drawText(0, y - 1, self.width() - 2, 10,
-                             Qt.AlignmentFlag.AlignRight, label)
+            # Center the text box on the tick, clamped inside the widget so
+            # the extreme labels (0 at top, -60 at bottom) stay fully visible.
+            y_text = max(0, min(h - text_h, y - text_h // 2))
+            painter.drawText(0, y_text, self.width() - 2, text_h,
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             label)
         painter.end()
 
 
@@ -212,8 +228,32 @@ class MetersPanel(QWidget):
 
         meter_row.addStretch()
 
+        # Wrap the scale in a column with transparent placeholders so its
+        # vertical extent matches the meter widget in the sibling columns.
+        # Without this, the scale spans the full row height and its "0" tick
+        # sits above the meter's actual top edge.
         self._scale = _DbScale()
-        meter_row.addWidget(self._scale)
+        scale_col = QVBoxLayout()
+        scale_col.setSpacing(2)
+
+        scale_header = QHBoxLayout()
+        scale_header.setSpacing(4)
+        scale_top_placeholder = QLabel("\u25cf")
+        scale_top_placeholder.setStyleSheet("color: transparent; font-size: 12px;")
+        scale_header.addWidget(scale_top_placeholder)
+        scale_header.addStretch()
+        scale_col.addLayout(scale_header)
+
+        scale_col.addWidget(self._scale)
+
+        scale_title_placeholder = QLabel("MIC")
+        scale_title_placeholder.setStyleSheet(
+            "color: transparent; font-size: 10px; font-weight: bold;"
+        )
+        scale_title_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scale_col.addWidget(scale_title_placeholder)
+
+        meter_row.addLayout(scale_col)
 
         # Mic column
         mic_col = QVBoxLayout()
@@ -229,11 +269,6 @@ class MetersPanel(QWidget):
 
         self._mic_meter = _VerticalMeter()
         mic_col.addWidget(self._mic_meter, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self._mic_db_label = QLabel("-- dB")
-        self._mic_db_label.setStyleSheet("color: #cdd6f4; font-size: 10px;")
-        self._mic_db_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mic_col.addWidget(self._mic_db_label)
 
         mic_title = QLabel("MIC")
         mic_title.setStyleSheet("color: #a6adc8; font-size: 10px; font-weight: bold;")
@@ -257,11 +292,6 @@ class MetersPanel(QWidget):
 
         self._sys_meter = _VerticalMeter()
         sys_col.addWidget(self._sys_meter, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self._sys_db_label = QLabel("-- dB")
-        self._sys_db_label.setStyleSheet("color: #cdd6f4; font-size: 10px;")
-        self._sys_db_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sys_col.addWidget(self._sys_db_label)
 
         sys_title = QLabel("SYS")
         sys_title.setStyleSheet("color: #a6adc8; font-size: 10px; font-weight: bold;")
@@ -314,8 +344,6 @@ class MetersPanel(QWidget):
     def reset(self):
         self._mic_meter.reset()
         self._sys_meter.reset()
-        self._mic_db_label.setText("-- dB")
-        self._sys_db_label.setText("-- dB")
         self._set_clip_led(self._mic_clip_led, False)
         self._set_clip_led(self._sys_clip_led, False)
 
@@ -339,8 +367,6 @@ class MetersPanel(QWidget):
     def _on_repaint_tick(self):
         self._mic_meter.update()
         self._sys_meter.update()
-        self._mic_db_label.setText(f"{self._mic_meter.current_db:.0f} dB")
-        self._sys_db_label.setText(f"{self._sys_meter.current_db:.0f} dB")
         self._set_clip_led(self._mic_clip_led, self._mic_meter.is_clipping())
         self._set_clip_led(self._sys_clip_led, self._sys_meter.is_clipping())
 

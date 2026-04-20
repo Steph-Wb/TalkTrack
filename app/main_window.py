@@ -1,8 +1,13 @@
 import json
+import logging
 import sys
 import webbrowser
 from pathlib import Path
 from datetime import datetime
+
+import sounddevice as sd
+
+logger = logging.getLogger(__name__)
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -12,7 +17,9 @@ from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QAction
 
 from app.utils.config import Config
+from app.recording.audio_capture import LoopbackStream
 from app.recording.process_audio_capture import ProcessAudioCapture
+from app.recording.mic_monitor import MicMonitor
 from app.recording.recorder import Recorder, RecordingState
 from app.transcription.transcriber import TranscriptionWorker, TranscriptResult
 from app.transcription.diarizer import DiarizationWorker, SimpleDiarizer
@@ -164,6 +171,16 @@ class MainWindow(QMainWindow):
         self.meters_panel.gain_changed.connect(self._on_gain_changed)
         left_layout.addWidget(self.meters_panel)
 
+        # Idle-time level monitors. Off by default every launch — user
+        # enables them via the Test Mic button in recording_controls.
+        # The system monitor uses WASAPI loopback regardless of capture mode
+        # (per-app capture is heavier and not worth spinning up for preview).
+        self.mic_monitor = MicMonitor(
+            sample_rate=self.config.get("audio", "sample_rate"),
+            level_callback=self.meters_panel.update_mic_level,
+        )
+        self.system_monitor = None  # LoopbackStream, created per-test
+
         # Waveform display (hidden until recording starts)
         self.waveform = WaveformDisplay(
             seconds=5,
@@ -257,6 +274,7 @@ class MainWindow(QMainWindow):
         self.recording_controls.pause_clicked.connect(self._toggle_pause)
         self.recording_controls.stop_clicked.connect(self._stop_recording)
         self.recording_controls.mute_clicked.connect(self._toggle_mute)
+        self.recording_controls.test_mic_toggled.connect(self._on_test_mic_toggled)
 
         # Recorder signals
         self.recorder.state_changed.connect(self._on_state_changed)
@@ -278,6 +296,9 @@ class MainWindow(QMainWindow):
         self.recordings_list.recording_selected.connect(self._on_recording_selected)
         self.recordings_list.recording_deleted.connect(self._on_recording_deleted)
         self.recordings_list.search_result_selected.connect(self._on_search_result_selected)
+
+        # Mic device change: restart monitor on new device if it's running
+        self.source_selector.mic_changed.connect(self._on_mic_device_changed)
 
         # Auto-stop when call ends / auto-start when call begins
         self.source_selector.apps_went_inactive.connect(self._on_apps_went_inactive)
@@ -326,6 +347,13 @@ class MainWindow(QMainWindow):
         # Save capture settings for next session
         self.source_selector.save_capture_settings()
 
+        # Release the test monitors so the recorder can claim the devices.
+        # No signal fired — we've already handled the teardown here.
+        if self.mic_monitor.is_active:
+            self.mic_monitor.stop()
+        self._stop_system_monitor()
+        self.recording_controls.clear_test_mic()
+
         self.recorder.start_recording(
             mic_device=mic,
             loopback_device=loopback,
@@ -366,6 +394,22 @@ class MainWindow(QMainWindow):
         self.recording_controls.set_muted(self._mic_muted)
         self.waveform.set_mic_muted(self._mic_muted)
         self.status_label.setText("Microphone muted" if self._mic_muted else "Recording...")
+
+    def _on_test_mic_toggled(self, enabled):
+        """User clicked Test Mic. Start or stop mic + system level monitors."""
+        if enabled:
+            if self.recorder.state != RecordingState.IDLE:
+                # Safety — the button is disabled during recording, but guard
+                # against races rather than double-opening the device.
+                self.recording_controls.clear_test_mic()
+                return
+            self.mic_monitor.set_gain(self.config.get("audio", "mic_gain"))
+            self.mic_monitor.start(self.source_selector.get_selected_mic())
+            self._start_system_monitor()
+        else:
+            self.mic_monitor.stop()
+            self._stop_system_monitor()
+            self.meters_panel.reset()
 
     def _start_system_monitor(self):
         """Start a buffer-less system audio stream feeding the system meter.
@@ -410,11 +454,27 @@ class MainWindow(QMainWindow):
             logger.warning("Test system monitor failed: %s", e)
             self.system_monitor = None
 
+    def _stop_system_monitor(self):
+        if self.system_monitor is None:
+            return
+        try:
+            self.system_monitor.stop()
+        except Exception as e:
+            logger.debug("System monitor stop error: %s", e)
+        self.system_monitor = None
+
+    def _on_mic_device_changed(self, device_index):
+        """Mic dropdown changed. If the monitor is running, move it to the new device."""
+        if self.mic_monitor.is_active:
+            self.mic_monitor.start(device_index)
+
     def _on_gain_changed(self, gain):
-        """Slider moved - apply live gain to capture, debounce config write."""
+        """Slider moved - apply live gain to capture or test monitor, debounce config write."""
         self._pending_gain = float(gain)
         if self.recorder._capture is not None:
             self.recorder._capture.set_gain(gain)
+        if self.mic_monitor.is_active:
+            self.mic_monitor.set_gain(gain)
         self._gain_save_timer.start(500)
 
     def _flush_gain_to_config(self):
@@ -1124,6 +1184,10 @@ class MainWindow(QMainWindow):
         if self._gain_save_timer.isActive():
             self._gain_save_timer.stop()
             self._flush_gain_to_config()
+        if hasattr(self, "mic_monitor"):
+            self.mic_monitor.stop()
+        if hasattr(self, "system_monitor"):
+            self._stop_system_monitor()
         if self.recorder.state != RecordingState.IDLE:
             self.recorder.stop_recording()
         self.config.save()
