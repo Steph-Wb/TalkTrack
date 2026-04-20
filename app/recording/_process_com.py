@@ -340,6 +340,23 @@ def _format_info_from_waveformatex(fmt):
     return rate, channels, format_tag, block_align
 
 
+def _query_apartment_type():
+    """Return a short string describing the thread's COM apartment, for logging."""
+    try:
+        apt_type = ctypes.c_int(0)
+        apt_qualifier = ctypes.c_int(0)
+        CoGetApartmentType = ctypes.windll.ole32.CoGetApartmentType
+        CoGetApartmentType.restype = ctypes.c_long
+        CoGetApartmentType.argtypes = [POINTER(ctypes.c_int), POINTER(ctypes.c_int)]
+        hr = CoGetApartmentType(byref(apt_type), byref(apt_qualifier))
+        if hr != 0:
+            return f"<CoGetApartmentType hr=0x{hr & 0xFFFFFFFF:08X}>"
+        names = {0: "CURRENT", 1: "STA", 2: "MTA", 3: "NTA", 4: "MAIN_STA"}
+        return f"{names.get(apt_type.value, apt_type.value)} (qual={apt_qualifier.value})"
+    except Exception as e:
+        return f"<query failed: {e}>"
+
+
 def activate_process_loopback(pid, timeout_ms=5000):
     """Synchronously activate an IAudioClient + IAudioCaptureClient for one PID.
 
@@ -348,12 +365,16 @@ def activate_process_loopback(pid, timeout_ms=5000):
     On any failure, returns (None, hresult). The caller translates the hresult
     via hresult_name().
     """
+    import threading
+
     # MTA init. CoInitializeEx returns S_OK on first call, S_FALSE if already
     # initialized in the same mode, or RPC_E_CHANGED_MODE if the thread is STA.
     hr_init = ctypes.windll.ole32.CoInitializeEx(None, COINIT_MULTITHREADED)
     hr_init_u32 = hr_init & 0xFFFFFFFF
-    logger.info("[PID %s] CoInitializeEx(MTA) -> %s (0x%08X)",
-                pid, hresult_name(hr_init_u32), hr_init_u32)
+    apt = _query_apartment_type()
+    logger.info("[PID %s] thread=%s CoInitializeEx(MTA) -> %s (0x%08X) apt=%s",
+                pid, threading.current_thread().name,
+                hresult_name(hr_init_u32), hr_init_u32, apt)
     if hr_init_u32 == RPC_E_CHANGED_MODE:
         return None, RPC_E_CHANGED_MODE
 
@@ -372,7 +393,8 @@ def activate_process_loopback(pid, timeout_ms=5000):
     pv = _PROPVARIANT()
     pv.vt = 0x41   # VT_BLOB
     pv.blob.cbSize = ctypes.sizeof(params)
-    pv.blob.pBlobData = ctypes.cast(ctypes.pointer(params), c_void_p)
+    params_addr = ctypes.addressof(params)
+    pv.blob.pBlobData = ctypes.cast(params_addr, c_void_p)
 
     # Manual-reset event for the handler to signal.
     event_handle = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
@@ -382,11 +404,9 @@ def activate_process_loopback(pid, timeout_ms=5000):
 
     handler_obj = _CompletionHandler(event_handle)
 
-    # Explicit QueryInterface so we pass a proper COM pointer to the C
-    # function, not a Python COMObject. ctypes' implicit coercion of
-    # COMObject -> POINTER(Interface) is unreliable across comtypes versions,
-    # and an invalid handler pointer is exactly the kind of thing that
-    # produces E_ILLEGAL_METHOD_CALL (0x8000000E) synchronously.
+    # QueryInterface to get a genuine COM pointer for the handler. This is
+    # passed as a raw c_void_p below, bypassing ctypes' interface-aware
+    # coercion path entirely.
     try:
         handler_ptr = handler_obj.QueryInterface(
             IActivateAudioInterfaceCompletionHandler,
@@ -398,32 +418,50 @@ def activate_process_loopback(pid, timeout_ms=5000):
         return None, ce.hresult & 0xFFFFFFFF
 
     try:
-        # Call ActivateAudioInterfaceAsync via WinDLL (not OleDLL) so we see
-        # the raw HRESULT rather than an auto-raise.
+        # Call via WinDLL with c_void_p throughout — no interface-aware
+        # coercion, we pass raw pointers. Previous approach with
+        # POINTER(Interface) argtypes was silently producing an invalid
+        # handler pointer, which is why the API kept returning
+        # E_ILLEGAL_METHOD_CALL (0x8000000E) synchronously.
         mmdev = ctypes.WinDLL("Mmdevapi.dll")
         ActivateAudioInterfaceAsync = mmdev.ActivateAudioInterfaceAsync
         ActivateAudioInterfaceAsync.restype = ctypes.c_long
         ActivateAudioInterfaceAsync.argtypes = [
-            c_wchar_p, POINTER(GUID), c_void_p,
-            POINTER(IActivateAudioInterfaceCompletionHandler),
-            POINTER(POINTER(IActivateAudioInterfaceAsyncOperation)),
+            c_wchar_p, c_void_p, c_void_p, c_void_p, c_void_p,
         ]
-        operation = POINTER(IActivateAudioInterfaceAsyncOperation)()
-        logger.info("[PID %s] Calling ActivateAudioInterfaceAsync (device=%r, params size=%d)",
-                    pid, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-                    ctypes.sizeof(params))
+        operation_ptr = c_void_p(0)
+
+        pv_addr = ctypes.cast(ctypes.pointer(pv), c_void_p).value
+        iid_addr = ctypes.cast(ctypes.pointer(IID_IAudioClient), c_void_p).value
+        handler_raw = ctypes.cast(handler_ptr, c_void_p).value
+
+        logger.info(
+            "[PID %s] Calling ActivateAudioInterfaceAsync "
+            "(device=%r, params_addr=0x%X, params_size=%d, pv_addr=0x%X, "
+            "iid_addr=0x%X, handler=0x%X)",
+            pid, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            params_addr, ctypes.sizeof(params),
+            pv_addr, iid_addr, handler_raw,
+        )
+
         hr = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-            byref(IID_IAudioClient),
-            ctypes.cast(ctypes.pointer(pv), c_void_p),
-            handler_ptr,
-            byref(operation),
+            iid_addr,
+            pv_addr,
+            handler_raw,
+            ctypes.cast(ctypes.pointer(operation_ptr), c_void_p),
         )
         hr_u32 = hr & 0xFFFFFFFF
         logger.info("[PID %s] ActivateAudioInterfaceAsync -> %s (0x%08X)",
                     pid, hresult_name(hr_u32), hr_u32)
         if hr != 0:
             return None, hr_u32
+
+        # operation_ptr now holds the async-operation pointer as a raw
+        # address. Wrap it as a proper interface pointer for GetActivateResult.
+        operation = ctypes.cast(
+            operation_ptr, POINTER(IActivateAudioInterfaceAsyncOperation),
+        )
 
         # Wait for the completion handler to SetEvent.
         wait_result = ctypes.windll.kernel32.WaitForSingleObject(
