@@ -62,25 +62,50 @@ cannot be meaningfully mocked. Run these after any change to
 - [ ] Click Test.
 - [ ] **Expected:** system meter sits at -60. This is correct — recording would capture silence too.
 
-## Known Tier-3 integration gaps (flagged during implementation)
+## Diagnostic logging
 
-These were deferred from the automated test phase and must be verified/fixed during smoke:
+`_process_com.activate_process_loopback` logs one INFO line per successful
+activation (`"[PID X] per-app activation complete (48000 Hz x 2 ch, float32)"`)
+and routes failures to WARNING with the HRESULT name + hex. For deeper
+per-step traces (apartment type, raw pointer addresses, each COM call's
+return), bump the logger to DEBUG:
 
-1. `activate_process_loopback` in `_process_com.py` returns a raw IAudioClient pointer but does not currently:
-   - Call `GetMixFormat` to populate real native_rate/channels/format on the stream.
-   - Call `IAudioClient::Initialize` with `AUDCLNT_STREAMFLAGS_LOOPBACK`.
-   - Call `IAudioClient::GetService(IID_IAudioCaptureClient)`.
-   - Call `IAudioClient::Start`.
-   - Stash `_native_frame_bytes = nBlockAlign` on the capture client.
-   - Set `_capture_client` on the owning `ProcessCaptureStream`.
-   Without these, the real COM path will AttributeError the first time `read_available()` is called. Complete the wiring while validating checks #1 and #2.
+```python
+import logging
+logging.getLogger("app.recording._process_com").setLevel(logging.DEBUG)
+```
 
-2. `_CompletionHandler.ActivateCompleted` may not receive the `this` pointer correctly under current comtypes binding — verify activation actually fires by logging or breakpointing the handler during check #1.
+## History: gaps resolved during bring-up
 
-3. `_com_packet_iter` in `ProcessCaptureStream` terminates permanently after the first "no more packets" tick. Once wired to real COM, it must be rebuilt per `read_available()` call OR yield a sentinel instead of returning. Fix during check #1/#2 debugging.
+Left here as a debugging reference — each bit us during Tier-3 validation
+and the fix is worth knowing about.
 
-4. PROPVARIANT / AUDIOCLIENT_ACTIVATION_PARAMS lifetime: the Python objects must stay alive through the `ActivateAudioInterfaceAsync` call — verify no use-after-free under stress (check #5).
+1. **Completion handler must implement `IAgileObject`.** Without it,
+   `ActivateAudioInterfaceAsync` fails synchronously with
+   `E_ILLEGAL_METHOD_CALL (0x8000000E)` because the API can't marshal the
+   callback across apartments. WRL samples get this for free via
+   `RuntimeClass`; `comtypes.COMObject` doesn't unless you list
+   `IAgileObject` in `_com_interfaces_`.
+
+2. **Virtual device path is a plain string, not a GUID.** The correct
+   value per `mmdeviceapi.h` is `L"VAD\\Process_Loopback"`. Passing a GUID
+   string returns `0x8000000E` synchronously.
+
+3. **ctypes arg coercion for interface pointers was unreliable.** Switched
+   `ActivateAudioInterfaceAsync.argtypes` to `c_void_p` across the board
+   and pass raw pointer addresses via `ctypes.cast`. Avoids silent coercion
+   failures with COMObject-derived handlers.
+
+4. **`_com_packet_iter` must not cache a generator.** A generator that
+   returns once goes permanently dead. `_drain_real_source` re-enters
+   `read_next_packet` on every `read_available()` call instead.
+
+5. **Apartment log mapping off-by-one.** APTTYPE enum is `STA=0, MTA=1`;
+   my initial dict had them shifted by one, so diagnostic output during
+   bring-up was misleading. Fixed.
 
 ## Regression run
 
-After any PR touching the capture files, run through checks 1–4 as a minimum. Checks 5–7 are quarterly or for changes to activation/cleanup paths.
+After any PR touching the capture files, run through checks 1–4 as a
+minimum. Checks 5–7 are quarterly or for changes to activation/cleanup
+paths.
