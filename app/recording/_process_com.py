@@ -171,6 +171,10 @@ IID_IActivateAudioInterfaceAsyncOperation = GUID(
 )
 IID_IAudioClient = GUID("{1CB9AD4C-DBFA-4C32-B178-C2F568A703B2}")
 IID_IAudioCaptureClient = GUID("{C8ADBD64-E71E-48A0-A4DE-185C395CD317}")
+# Marker interface — apartment-neutral / thread-agile. Required by
+# ActivateAudioInterfaceAsync on the completion handler (the C++ samples get
+# this for free via WRL::RuntimeClass; Python COMObject doesn't).
+IID_IAgileObject = GUID("{94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90}")
 
 
 # --- COM interfaces ---
@@ -199,6 +203,16 @@ class IActivateAudioInterfaceCompletionHandler(IUnknown):
              "activateOperation"),
         ),
     ]
+
+
+class IAgileObject(IUnknown):
+    """Marker interface — apartment-neutral object. No methods beyond IUnknown.
+
+    Required on the ActivateAudioInterfaceAsync completion handler so Windows
+    can safely invoke it from whichever apartment the async machinery chooses.
+    """
+    _iid_ = IID_IAgileObject
+    _methods_ = []
 
 
 class IAudioClient(IUnknown):
@@ -283,11 +297,19 @@ class IAudioCaptureClient(IUnknown):
 class _CompletionHandler(comtypes.COMObject):
     """Python COM object that signals a Win32 event when activation completes.
 
+    Implements BOTH IActivateAudioInterfaceCompletionHandler (the callback
+    surface) AND IAgileObject (the apartment-neutrality marker). Without
+    IAgileObject, ActivateAudioInterfaceAsync fails synchronously with
+    E_ILLEGAL_METHOD_CALL (0x8000000E) because it can't safely marshal the
+    callback across apartments.
+
     comtypes COMObject method signatures do NOT include the `this` pointer —
-    the library handles that internally. The arg list must match the COM
-    interface IDL exactly (minus `this`).
+    the library handles that internally.
     """
-    _com_interfaces_ = [IActivateAudioInterfaceCompletionHandler]
+    _com_interfaces_ = [
+        IActivateAudioInterfaceCompletionHandler,
+        IAgileObject,
+    ]
 
     def __init__(self, event_handle):
         super().__init__()
@@ -351,7 +373,9 @@ def _query_apartment_type():
         hr = CoGetApartmentType(byref(apt_type), byref(apt_qualifier))
         if hr != 0:
             return f"<CoGetApartmentType hr=0x{hr & 0xFFFFFFFF:08X}>"
-        names = {0: "CURRENT", 1: "STA", 2: "MTA", 3: "NTA", 4: "MAIN_STA"}
+        # APTTYPE enum from objidlbase.h:
+        # CURRENT = -1, STA = 0, MTA = 1, NA = 2, MAINSTA = 3
+        names = {-1: "CURRENT", 0: "STA", 1: "MTA", 2: "NA", 3: "MAIN_STA"}
         return f"{names.get(apt_type.value, apt_type.value)} (qual={apt_qualifier.value})"
     except Exception as e:
         return f"<query failed: {e}>"
