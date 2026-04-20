@@ -20,6 +20,13 @@
 - Implementation: paint color zones over full height, then fill the **empty region ABOVE current level** with background color (`0` to `current_y`), NOT below. Getting this backwards makes the bar look like it's losing color as you speak.
 - Peak hold line: 3px `#f5e0dc` (rosewater) — stands out against green/yellow/red and the dark empty region.
 
+## Peak-sample vs RMS bar
+
+- `_VerticalMeter` drives the bar from the **peak sample** (`20·log10(max|x|)`), not RMS. Reason: with an RMS bar, the peak-hold line floats several dB above the bar's top *always* (RMS < peak for any real signal), which reads as "the line doesn't match the bar". With a peak-sample bar, the hold line sits AT the bar's top while rising and only floats above during the hold/decay phase — the DAW convention.
+- The held peak has its own state (`_peak_abs` + hold/decay via `peak_hold_value`) — independent of the bar. Don't unify them or the hold animation disappears.
+- 2px outline in surface0 (`#313244`) around each channel so the meter frame is visible even when silent. Drawn last so it overdraws the top/bottom of the color fills; acceptable cosmetic loss at those exact edges.
+- Scale ticks: `[0, -18, -40, -60]` at 11px. `-6` overlapped `0` at this font size; `-40` is useful enough to keep over a four-tick scale.
+
 ## Qt QSS gotchas
 
 - Plain `QWidget` subclasses don't render `background-color` from QSS unless you set `WA_StyledBackground` attribute. Symptom: `#myPanel { background-color: X }` appears to apply everywhere or nowhere predictably.

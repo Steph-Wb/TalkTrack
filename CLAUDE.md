@@ -7,7 +7,8 @@ Topic-specific rules are in `.claude/rules/`. `ways-of-working.md` is always loa
 @./.claude/rules/ways-of-working.md
 
 - [audio-pipeline.md](.claude/rules/audio-pipeline.md) — AudioStream callback order, mute/gain scoping, MainWindow→capture access pattern.
-- [ui-patterns.md](.claude/rules/ui-patterns.md) — CollapsibleSection, left-panel conventions, DAW meter fill direction, Qt QSS gotchas, Catppuccin palette.
+- [per-app-audio-capture.md](.claude/rules/per-app-audio-capture.md) — Windows 11 process-loopback COM invariants (IAgileObject, device path, ctypes arg passing, generator caching gotcha).
+- [ui-patterns.md](.claude/rules/ui-patterns.md) — CollapsibleSection, left-panel conventions, DAW meter fill direction, peak-sample bar semantics, Qt QSS gotchas, Catppuccin palette.
 
 ## Project Overview
 

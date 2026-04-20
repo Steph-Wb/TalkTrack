@@ -16,7 +16,7 @@ The level meter and waveform see the processed signal (what's actually being rec
 
 - Both live on `DualAudioCapture`: `_muted` + `set_muted(bool)` and `mic_gain` + `set_gain(float)`.
 - Both propagate to `mic_stream` AND `mic_stream_2` (dual-mic-aware).
-- Neither touches `loopback_stream` — system/app audio is **never** muted or gained. The "cough button" and "boost my mic" use cases are mic-only by design.
+- Neither touches `system_stream` — system/app audio is **never** muted or gained. The "cough button" and "boost my mic" use cases are mic-only by design.
 - `set_gain` always propagates; `start()` re-applies both after each mic stream is created.
 
 ## MainWindow → capture access pattern
