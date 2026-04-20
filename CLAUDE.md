@@ -287,6 +287,5 @@ When running shell commands:
 
 ## Known Limitations
 
-- **Per-process COM capture is scaffolded:** The `ProcessCaptureStream._read_audio_packets()` method is a pipeline placeholder. The COM initialization structure is in place but the actual `IAudioCaptureClient.GetBuffer()` packet reading needs to be completed with real audio testing on Windows 11.
 - **Windows only:** Uses WASAPI and Windows COM APIs
 - **Per-app capture requires Windows 11 Build 22000+**

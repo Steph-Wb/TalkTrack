@@ -395,10 +395,10 @@ def activate_process_loopback(pid, timeout_ms=5000):
     # initialized in the same mode, or RPC_E_CHANGED_MODE if the thread is STA.
     hr_init = ctypes.windll.ole32.CoInitializeEx(None, COINIT_MULTITHREADED)
     hr_init_u32 = hr_init & 0xFFFFFFFF
-    apt = _query_apartment_type()
-    logger.info("[PID %s] thread=%s CoInitializeEx(MTA) -> %s (0x%08X) apt=%s",
-                pid, threading.current_thread().name,
-                hresult_name(hr_init_u32), hr_init_u32, apt)
+    logger.debug("[PID %s] thread=%s CoInitializeEx(MTA) -> %s (0x%08X) apt=%s",
+                 pid, threading.current_thread().name,
+                 hresult_name(hr_init_u32), hr_init_u32,
+                 _query_apartment_type())
     if hr_init_u32 == RPC_E_CHANGED_MODE:
         return None, RPC_E_CHANGED_MODE
 
@@ -459,10 +459,9 @@ def activate_process_loopback(pid, timeout_ms=5000):
         iid_addr = ctypes.cast(ctypes.pointer(IID_IAudioClient), c_void_p).value
         handler_raw = ctypes.cast(handler_ptr, c_void_p).value
 
-        logger.info(
-            "[PID %s] Calling ActivateAudioInterfaceAsync "
-            "(device=%r, params_addr=0x%X, params_size=%d, pv_addr=0x%X, "
-            "iid_addr=0x%X, handler=0x%X)",
+        logger.debug(
+            "[PID %s] ActivateAudioInterfaceAsync args: device=%r, "
+            "params_addr=0x%X size=%d, pv_addr=0x%X, iid_addr=0x%X, handler=0x%X",
             pid, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             params_addr, ctypes.sizeof(params),
             pv_addr, iid_addr, handler_raw,
@@ -476,10 +475,11 @@ def activate_process_loopback(pid, timeout_ms=5000):
             ctypes.cast(ctypes.pointer(operation_ptr), c_void_p),
         )
         hr_u32 = hr & 0xFFFFFFFF
-        logger.info("[PID %s] ActivateAudioInterfaceAsync -> %s (0x%08X)",
-                    pid, hresult_name(hr_u32), hr_u32)
         if hr != 0:
+            logger.warning("[PID %s] ActivateAudioInterfaceAsync -> %s (0x%08X)",
+                           pid, hresult_name(hr_u32), hr_u32)
             return None, hr_u32
+        logger.debug("[PID %s] ActivateAudioInterfaceAsync -> S_OK", pid)
 
         # operation_ptr now holds the async-operation pointer as a raw
         # address. Wrap it as a proper interface pointer for GetActivateResult.
@@ -491,16 +491,17 @@ def activate_process_loopback(pid, timeout_ms=5000):
         wait_result = ctypes.windll.kernel32.WaitForSingleObject(
             event_handle, timeout_ms,
         )
-        logger.info("[PID %s] WaitForSingleObject -> 0x%08X", pid, wait_result)
         if wait_result != 0:
+            logger.warning("[PID %s] WaitForSingleObject -> 0x%08X",
+                           pid, wait_result)
             return None, 0x80004005
 
         activate_hr, activated = operation.GetActivateResult()
         activate_hr_u32 = activate_hr & 0xFFFFFFFF if activate_hr else 0
-        logger.info("[PID %s] GetActivateResult -> %s (0x%08X), activated=%r",
-                    pid, hresult_name(activate_hr_u32), activate_hr_u32,
-                    bool(activated))
         if activate_hr != 0 or not activated:
+            logger.warning("[PID %s] GetActivateResult -> %s (0x%08X), activated=%r",
+                           pid, hresult_name(activate_hr_u32),
+                           activate_hr_u32, bool(activated))
             return None, activate_hr_u32 if activate_hr else 0x80004003
 
         try:
@@ -538,9 +539,9 @@ def activate_process_loopback(pid, timeout_ms=5000):
                 )
             finally:
                 ctypes.windll.ole32.CoTaskMemFree(mix_format_ptr)
-        logger.info("[PID %s] negotiated format: %d Hz x %d ch (%s), frame_bytes=%d",
-                    pid, native_rate, native_channels, native_format,
-                    native_frame_bytes)
+        logger.debug("[PID %s] negotiated format: %d Hz x %d ch (%s), frame_bytes=%d",
+                     pid, native_rate, native_channels, native_format,
+                     native_frame_bytes)
 
         try:
             capture_client_void = audio_client.GetService(byref(IID_IAudioCaptureClient))
@@ -560,7 +561,10 @@ def activate_process_loopback(pid, timeout_ms=5000):
                            pid, ce.hresult & 0xFFFFFFFF)
             return None, ce.hresult & 0xFFFFFFFF
 
-        logger.info("[PID %s] activation complete", pid)
+        logger.info(
+            "[PID %s] per-app activation complete (%d Hz x %d ch, %s)",
+            pid, native_rate, native_channels, native_format,
+        )
         context = _ActivatedContext(
             audio_client=audio_client,
             capture_client=capture_client,
