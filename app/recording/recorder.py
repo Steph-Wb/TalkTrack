@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 import json
@@ -9,6 +10,8 @@ from enum import Enum
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
 from app.recording.audio_capture import DualAudioCapture
+
+logger = logging.getLogger(__name__)
 
 
 class RecordingState(Enum):
@@ -129,6 +132,8 @@ class Recorder(QObject):
         if self._state not in (RecordingState.RECORDING, RecordingState.PAUSED):
             return
 
+        elapsed = self._capture.get_elapsed_time() if self._capture else 0.0
+        logger.info("stop_recording called after %.1fs", elapsed)
         self._set_state(RecordingState.STOPPING)
         self._stop_timer()
 
