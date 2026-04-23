@@ -35,6 +35,48 @@ KNOWN_AUDIO_APPS = {
     "Spotify",
 }
 
+# Processes that host embedded browsers whose audio sessions should be
+# reattributed to their ancestor app when one of these is found in the
+# parent chain. New Teams (Teams 2.x) is a WebView2 app — its audio comes
+# from msedgewebview2.exe children parented by ms-teams.exe, so selecting
+# "Microsoft Teams" would capture nothing unless we reattribute.
+_WEBVIEW_HOSTS = {"msedgewebview2", "msedgewebview2.exe"}
+# Ancestor names (base, case-insensitive match below) that win reattribution.
+_WEBVIEW_ANCESTOR_APPS = {"ms-teams", "teams"}
+_PARENT_WALK_MAX_DEPTH = 6
+
+
+def _find_webview_ancestor(pid, psutil_mod):
+    """If pid is a webview host, walk parents looking for a known audio app.
+
+    Returns (ancestor_process_name, ancestor_pid) or None.
+    """
+    try:
+        proc = psutil_mod.Process(pid)
+    except Exception:
+        return None
+
+    base = _base_name(proc.name()).lower()
+    if base not in {h.lower() for h in _WEBVIEW_HOSTS}:
+        return None
+
+    current = proc
+    for _ in range(_PARENT_WALK_MAX_DEPTH):
+        try:
+            parent = current.parent()
+        except Exception:
+            return None
+        if parent is None:
+            return None
+        try:
+            pname = parent.name()
+        except Exception:
+            return None
+        if _base_name(pname).lower() in _WEBVIEW_ANCESTOR_APPS:
+            return pname, parent.pid
+        current = parent
+    return None
+
 
 def _friendly_name(process_name):
     """Convert process name to a user-friendly display name."""
@@ -82,6 +124,13 @@ def get_active_audio_apps():
             continue
 
         process_name = session.Process.name()
+
+        # Reattribute webview hosts (e.g. msedgewebview2) to their parent
+        # app (e.g. ms-teams) when one is found in the ancestor chain.
+        ancestor = _find_webview_ancestor(pid, psutil)
+        if ancestor is not None:
+            process_name = ancestor[0]
+
         display_name = _friendly_name(process_name)
         active_pids.add(pid)
 

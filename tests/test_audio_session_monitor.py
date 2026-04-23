@@ -134,6 +134,78 @@ class TestGetActiveAudioApps(unittest.TestCase):
 
     @patch("app.utils.audio_session_monitor.psutil")
     @patch("app.utils.audio_session_monitor.AudioUtilities")
+    def test_webview2_child_of_teams_attributed_to_teams(self, mock_au, mock_psutil):
+        """New Teams (Teams 2.x) audio comes from msedgewebview2 child processes
+        parented by ms-teams.exe. They must appear under "Microsoft Teams",
+        not "Microsoft Edge", or users selecting Teams capture nothing.
+        """
+        child_session = MagicMock()
+        child_session.Process = MagicMock()
+        child_session.Process.name.return_value = "msedgewebview2.exe"
+        child_session.Process.pid = 4242
+
+        mock_au.GetAllSessions.return_value = [child_session]
+
+        # psutil.Process(4242).parent() returns ms-teams.exe process
+        parent_proc = MagicMock()
+        parent_proc.name.return_value = "ms-teams.exe"
+        parent_proc.pid = 1000
+        parent_proc.parent.return_value = None
+
+        child_proc = MagicMock()
+        child_proc.name.return_value = "msedgewebview2.exe"
+        child_proc.pid = 4242
+        child_proc.parent.return_value = parent_proc
+
+        def process_factory(pid):
+            return {4242: child_proc, 1000: parent_proc}[pid]
+
+        mock_psutil.Process.side_effect = process_factory
+        mock_psutil.NoSuchProcess = Exception
+        mock_psutil.AccessDenied = Exception
+        mock_psutil.process_iter.return_value = []
+
+        from app.utils.audio_session_monitor import get_active_audio_apps
+        result = get_active_audio_apps()
+        names = [r["name"] for r in result]
+        self.assertIn("Microsoft Teams", names)
+        self.assertNotIn("Microsoft Edge", names)
+        teams = next(r for r in result if r["name"] == "Microsoft Teams")
+        self.assertIn(4242, teams["pids"])
+
+    @patch("app.utils.audio_session_monitor.psutil")
+    @patch("app.utils.audio_session_monitor.AudioUtilities")
+    def test_standalone_edge_webview_stays_as_edge(self, mock_au, mock_psutil):
+        """msedgewebview2 without Teams parent stays attributed to Edge."""
+        sess = MagicMock()
+        sess.Process = MagicMock()
+        sess.Process.name.return_value = "msedgewebview2.exe"
+        sess.Process.pid = 7777
+
+        mock_au.GetAllSessions.return_value = [sess]
+
+        root = MagicMock()
+        root.name.return_value = "explorer.exe"
+        root.pid = 1
+        root.parent.return_value = None
+
+        proc = MagicMock()
+        proc.name.return_value = "msedgewebview2.exe"
+        proc.pid = 7777
+        proc.parent.return_value = root
+
+        mock_psutil.Process.side_effect = lambda pid: {7777: proc, 1: root}[pid]
+        mock_psutil.NoSuchProcess = Exception
+        mock_psutil.AccessDenied = Exception
+        mock_psutil.process_iter.return_value = []
+
+        from app.utils.audio_session_monitor import get_active_audio_apps
+        result = get_active_audio_apps()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["name"], "Microsoft Edge")
+
+    @patch("app.utils.audio_session_monitor.psutil")
+    @patch("app.utils.audio_session_monitor.AudioUtilities")
     def test_strips_exe_extension_from_name(self, mock_au, mock_psutil):
         mock_session = MagicMock()
         mock_session.Process = MagicMock()
