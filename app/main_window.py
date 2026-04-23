@@ -179,6 +179,14 @@ class MainWindow(QMainWindow):
             sample_rate=self.config.get("audio", "sample_rate"),
             level_callback=self.meters_panel.update_mic_level,
         )
+        # Second monitor for dual-mic mode. Both feed the same meter
+        # callback so the UI behaves like recording: whichever mic produced
+        # the most recent chunk drives the bar (no true sum — matches
+        # DualAudioCapture's shared _mic_level_callback semantics).
+        self.mic_monitor_2 = MicMonitor(
+            sample_rate=self.config.get("audio", "sample_rate"),
+            level_callback=self.meters_panel.update_mic_level,
+        )
         self.system_monitor = None  # LoopbackStream, created per-test
 
         # Waveform display (hidden until recording starts)
@@ -351,6 +359,8 @@ class MainWindow(QMainWindow):
         # No signal fired — we've already handled the teardown here.
         if self.mic_monitor.is_active:
             self.mic_monitor.stop()
+        if self.mic_monitor_2.is_active:
+            self.mic_monitor_2.stop()
         self._stop_system_monitor()
         self.recording_controls.clear_test_mic()
 
@@ -403,11 +413,17 @@ class MainWindow(QMainWindow):
                 # against races rather than double-opening the device.
                 self.recording_controls.clear_test_mic()
                 return
-            self.mic_monitor.set_gain(self.config.get("audio", "mic_gain"))
+            gain = self.config.get("audio", "mic_gain")
+            self.mic_monitor.set_gain(gain)
             self.mic_monitor.start(self.source_selector.get_selected_mic())
+            mic2 = self.source_selector.get_selected_mic2()
+            if mic2 is not None:
+                self.mic_monitor_2.set_gain(gain)
+                self.mic_monitor_2.start(mic2)
             self._start_system_monitor()
         else:
             self.mic_monitor.stop()
+            self.mic_monitor_2.stop()
             self._stop_system_monitor()
             self.meters_panel.reset()
 
@@ -433,7 +449,19 @@ class MainWindow(QMainWindow):
             status = monitor.start()
             if status["active"] == 0:
                 logger.warning("Test per-app monitor failed: %s", status["failures"])
+                self.status_label.setText(
+                    f"Test failed: 0 of {status['total']} selected app PIDs activated"
+                )
                 return
+            if status["failures"]:
+                logger.warning(
+                    "Test per-app monitor: partial activation %d of %d — failures=%s",
+                    status["active"], status["total"], status["failures"],
+                )
+                self.status_label.setText(
+                    f"Testing {status['active']} of {status['total']} app PIDs "
+                    "(some failed — see log)"
+                )
             self.system_monitor = monitor
             return
 
@@ -475,6 +503,8 @@ class MainWindow(QMainWindow):
             self.recorder._capture.set_gain(gain)
         if self.mic_monitor.is_active:
             self.mic_monitor.set_gain(gain)
+        if self.mic_monitor_2.is_active:
+            self.mic_monitor_2.set_gain(gain)
         self._gain_save_timer.start(500)
 
     def _flush_gain_to_config(self):
@@ -494,12 +524,19 @@ class MainWindow(QMainWindow):
         """Auto-stop recording when all selected apps leave their call."""
         if self.recorder.state in (RecordingState.RECORDING, RecordingState.PAUSED):
             if self.source_selector.is_per_app_mode():
+                logger.warning("Auto-stop: selected apps went inactive (per-app mode)")
                 self.status_label.setText("Call ended — stopping recording...")
                 self.recorder.stop_recording()
 
     def _on_silence_detected(self, seconds):
         """Auto-stop recording when system audio has been silent too long."""
         if self.recorder.state in (RecordingState.RECORDING, RecordingState.PAUSED):
+            logger.warning(
+                "Auto-stop: silence on system audio for %.1fs (threshold=%.3f, duration=%ss)",
+                seconds,
+                0.005,
+                self.config.get("general", "silence_duration"),
+            )
             self.status_label.setText(
                 f"Silence detected ({seconds:.0f}s) — stopping recording..."
             )
@@ -596,10 +633,17 @@ class MainWindow(QMainWindow):
         # Update recording header
         self.recording_header.set_recording(session)
 
-        # Auto-start transcription if audio available and long enough
+        # Auto-start transcription if enabled, audio available, long enough
         duration = session.get("duration", 0)
         min_duration = self.config.get("transcription", "min_duration")
-        if audio_for_transcript and duration >= min_duration:
+        auto_transcribe = self.config.get("general", "auto_transcribe")
+        if not auto_transcribe:
+            if audio_for_transcript:
+                self.status_label.setText(
+                    "Recording saved — auto-transcribe disabled. "
+                    "Use Transcribe button to transcribe manually."
+                )
+        elif audio_for_transcript and duration >= min_duration:
             self._start_transcription(audio_for_transcript)
         elif audio_for_transcript:
             self.status_label.setText(
@@ -935,6 +979,7 @@ class MainWindow(QMainWindow):
 
     def _on_pid_lost(self, pid, error):
         """One PID died during recording. Update the warning label + status bar."""
+        logger.warning("PID lost during recording: pid=%s error=%s", pid, error)
         if not hasattr(self, "_current_capture_failures"):
             self._current_capture_failures = {}
         self._current_capture_failures[pid] = error
@@ -951,6 +996,7 @@ class MainWindow(QMainWindow):
         """All selected apps became unavailable. Stop and save what we have."""
         if self.recorder.state not in (RecordingState.RECORDING, RecordingState.PAUSED):
             return
+        logger.warning("Auto-stop: capture_lost (all per-app streams unavailable)")
         self.status_label.setText(
             "Capture ended: all selected apps became unavailable"
         )
@@ -1077,6 +1123,8 @@ class MainWindow(QMainWindow):
             self.chat_panel.set_provider(None)
 
     def _maybe_auto_summarize(self):
+        if not self.config.get("general", "auto_transcribe"):
+            return
         if not self.config.get("ai", "auto_summarize"):
             return
         if self.config.get("ai", "provider") == "none":
@@ -1186,6 +1234,8 @@ class MainWindow(QMainWindow):
             self._flush_gain_to_config()
         if hasattr(self, "mic_monitor"):
             self.mic_monitor.stop()
+        if hasattr(self, "mic_monitor_2"):
+            self.mic_monitor_2.stop()
         if hasattr(self, "system_monitor"):
             self._stop_system_monitor()
         if self.recorder.state != RecordingState.IDLE:
