@@ -271,12 +271,16 @@ class DualAudioCapture:
         self.app_pids = app_pids or []
         self._mic_level_callback = None
         self._system_level_callback = None
-        # Silence detection (system audio only)
+        # Silence detection on system audio — guarded by mic activity.
+        # If the user is talking (mic RMS > threshold) anywhere inside the
+        # silence window, the silence timer resets. Prevents auto-stop
+        # during a monologue when the remote is muted or on dead air.
         self._silence_threshold = 0.005  # RMS below this = silence
         self._silence_duration = 30  # seconds of silence before firing
         self._silence_callback = None
         self._silent_since = None  # timestamp when silence started
         self._silence_fired = False  # only fire once per silence stretch
+        self._last_mic_active_time = None  # updated from mic callbacks
         self._muted = False
         self.mic_gain = 1.0
         self._pid_lost_callback = None
@@ -382,13 +386,20 @@ class DualAudioCapture:
         else:
             logger.warning("No system audio device selected")
 
+        # Wrap the outer mic level callback so every chunk also updates
+        # _last_mic_active_time for the silence-guard check.
+        def _mic_cb(chunk):
+            self._note_mic_activity(chunk)
+            if self._mic_level_callback is not None:
+                self._mic_level_callback(chunk)
+
         # Microphone capture (sounddevice)
         if self.mic_device is not None:
             self.mic_stream = AudioStream(
                 device_index=self.mic_device,
                 sample_rate=self.sample_rate,
                 channels=1,
-                level_callback=self._mic_level_callback,
+                level_callback=_mic_cb,
             )
             self.mic_stream.start()
             if self._muted:
@@ -405,7 +416,7 @@ class DualAudioCapture:
                 device_index=self.mic_device_2,
                 sample_rate=self.sample_rate,
                 channels=1,
-                level_callback=self._mic_level_callback,
+                level_callback=_mic_cb,
             )
             self.mic_stream_2.start()
             if self._muted:
@@ -547,13 +558,32 @@ class DualAudioCapture:
             combined = combined / peak * 0.95
         return combined
 
+    def _note_mic_activity(self, chunk):
+        """Called from wrapped mic callbacks. Stamps mic activity.
+
+        Only chunks whose RMS exceeds the silence threshold count as
+        activity — ambient noise floor under the threshold is ignored.
+        """
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        if rms >= self._silence_threshold:
+            self._last_mic_active_time = time.time()
+
     def _check_silence(self, chunk):
-        """Check system audio chunk for silence, fire callback if sustained."""
+        """Check system audio chunk for silence, fire callback if sustained.
+
+        Mic-aware: if the mic was active within the silence window, reset
+        the silence anchor. The callback never fires while the user is
+        talking, even if the remote side is dead air.
+        """
         if not self._silence_callback or self._silence_fired:
             return
         rms = float(np.sqrt(np.mean(chunk ** 2)))
-        if rms < self._silence_threshold:
-            now = time.time()
+        now = time.time()
+        mic_recent = (
+            self._last_mic_active_time is not None
+            and (now - self._last_mic_active_time) < self._silence_duration
+        )
+        if rms < self._silence_threshold and not mic_recent:
             if self._silent_since is None:
                 self._silent_since = now
             elif now - self._silent_since >= self._silence_duration:

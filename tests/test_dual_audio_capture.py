@@ -339,5 +339,69 @@ class TestDualAudioCaptureDispatch(unittest.TestCase):
         self.assertIsNone(cap.system_stream)
 
 
+class TestSilenceDetectionMicGuard(unittest.TestCase):
+    """Silence auto-stop must not fire while the mic is active.
+
+    Scenario: remote is muted / dead air but the user is monologuing.
+    The old behavior fired silence-stop after silence_duration of quiet
+    system audio regardless of mic. Now mic activity inside the window
+    resets the silence timer so the recording keeps going.
+    """
+
+    def _make_capture(self):
+        from app.recording.audio_capture import DualAudioCapture
+        cap = DualAudioCapture(
+            mic_device=None, loopback_device=None,
+            sample_rate=16000, capture_mode="legacy",
+        )
+        self.fired = []
+        cap.set_silence_detection(
+            threshold=0.005,
+            duration=1.0,
+            callback=lambda secs: self.fired.append(secs),
+        )
+        return cap
+
+    def test_silence_fires_without_mic_activity(self):
+        cap = self._make_capture()
+        silent = np.zeros(1600, dtype=np.float32)  # 0.1s
+        # Simulate 1.5s of silent system chunks, well past the 1.0s threshold.
+        import time
+        for _ in range(5):
+            cap._check_silence(silent)
+            time.sleep(0.25)
+        cap._check_silence(silent)
+        self.assertEqual(len(self.fired), 1)
+
+    def test_mic_activity_resets_silence_timer(self):
+        cap = self._make_capture()
+        silent = np.zeros(1600, dtype=np.float32)
+        loud_mic = np.full(1600, 0.3, dtype=np.float32)
+        import time
+        # 0.5s of system silence
+        cap._check_silence(silent)
+        time.sleep(0.5)
+        cap._check_silence(silent)
+        # Mic spikes — should reset the silence anchor.
+        cap._note_mic_activity(loud_mic)
+        # Another 0.8s of system silence. Under 1.0s from the mic spike,
+        # so silence must NOT fire yet even though total elapsed > duration.
+        time.sleep(0.8)
+        cap._check_silence(silent)
+        self.assertEqual(self.fired, [])
+
+    def test_quiet_mic_does_not_reset(self):
+        cap = self._make_capture()
+        silent_sys = np.zeros(1600, dtype=np.float32)
+        quiet_mic = np.full(1600, 0.001, dtype=np.float32)  # below threshold
+        import time
+        cap._check_silence(silent_sys)
+        time.sleep(0.3)
+        cap._note_mic_activity(quiet_mic)
+        time.sleep(0.8)
+        cap._check_silence(silent_sys)
+        self.assertEqual(len(self.fired), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
