@@ -14,6 +14,21 @@ from app.utils.platform_info import is_windows_11
 from app.ui.collapsible_section import CollapsibleSection
 
 
+# Apps that set AUDCLNT_STREAMFLAGS_EXCLUDE_FROM_PROCESS_LOOPBACK_CAPTURE
+# on their call audio stream, making per-app loopback return silence
+# during calls. Process-loopback captures non-call audio from these apps
+# (chat chimes, notifications) but not the actual conversation.
+# See docs/per-app-audio-capture.md for background.
+CONFERENCING_APPS = {
+    "Microsoft Teams",
+    "Zoom",
+    "Webex",
+    "GoToMeeting",
+    "Google Meet",
+    "Discord",
+}
+
+
 def format_per_app_suffix(names):
     """Build the collapsed-title suffix for per-app capture mode.
 
@@ -186,6 +201,29 @@ class SourceSelector(QWidget):
         self.app_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         parent_layout.addWidget(self.app_list, 1)
 
+        # Warning shown when a conferencing app is checked in per-app mode.
+        # Those apps set AUDCLNT_STREAMFLAGS_EXCLUDE_FROM_PROCESS_LOOPBACK_
+        # CAPTURE on their call stream, so per-app loopback gets silence.
+        # Legacy mode (device-level WASAPI tap) bypasses the opt-out.
+        self.conferencing_warning = QLabel(
+            "⚠ Teams / Zoom / WebEx block per-app recording. "
+            "Switch to \"All system audio\" to capture calls."
+        )
+        self.conferencing_warning.setObjectName("conferencingWarning")
+        self.conferencing_warning.setWordWrap(True)
+        self.conferencing_warning.setStyleSheet(
+            "QLabel#conferencingWarning {"
+            " color: #f9e2af;"
+            " background-color: #313244;"
+            " border: 1px solid #f9e2af;"
+            " border-radius: 4px;"
+            " padding: 6px;"
+            " font-size: 9pt;"
+            "}"
+        )
+        self.conferencing_warning.setVisible(False)
+        parent_layout.addWidget(self.conferencing_warning)
+
         # Hidden legacy combo for fallback
         self.loopback_combo = QComboBox()
         self.loopback_combo.setVisible(False)
@@ -226,6 +264,30 @@ class SourceSelector(QWidget):
             self._section.set_title(self._BASE_TITLE)
         else:
             self._section.set_title(f"{self._BASE_TITLE} {self._selected_sources_text()}")
+        self._update_conferencing_warning()
+
+    def _update_conferencing_warning(self):
+        """Show the opt-out warning only when a conferencing app is checked
+        in per-app mode. Legacy (device-level loopback) works fine, so
+        hide the warning there.
+        """
+        if not self._win11 or self.app_list is None:
+            return
+        if not hasattr(self, "conferencing_warning"):
+            return
+        show = False
+        if self.get_capture_mode() == "per_app":
+            for i in range(self.app_list.count()):
+                item = self.app_list.item(i)
+                if item.checkState() != Qt.CheckState.Checked:
+                    continue
+                # Strip the trailing "  (N processes)" / "  (not in call)"
+                # suffix added at list-render time so the match keys on name only.
+                label = item.text().split("  ")[0]
+                if label in CONFERENCING_APPS:
+                    show = True
+                    break
+        self.conferencing_warning.setVisible(show)
 
     def _start_auto_refresh(self):
         if self._auto_refresh_timer is None:
