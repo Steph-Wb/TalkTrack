@@ -7,7 +7,7 @@ import sounddevice as sd
 import soundfile as sf
 from pathlib import Path
 
-from app.recording.process_audio_capture import ProcessAudioCapture
+from app.recording.process_audio_capture import ProcessAudioCapture, _Resampler
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,12 @@ class LoopbackStream:
         self._all_chunks = []
         self._native_rate = None
         self._native_channels = None
+        # Polyphase resampler built on start() once native_rate is known.
+        # Stateful across callback invocations — the previous FFT-based
+        # scipy.signal.resample call resampled each chunk in isolation,
+        # producing discontinuities at chunk boundaries that sounded like
+        # faint crackle during remote speech.
+        self._resampler = None
 
     def _find_loopback_device(self):
         """Find the WASAPI loopback device matching the selected output."""
@@ -171,6 +177,8 @@ class LoopbackStream:
             self._native_rate, self._native_channels,
         )
 
+        self._resampler = _Resampler(self._native_rate, self._target_rate)
+
         self._stream = self._pa.open(
             format=pyaudio.paFloat32,
             channels=self._native_channels,
@@ -196,11 +204,14 @@ class LoopbackStream:
             else:
                 mono = chunk.flatten()
 
-            # Resample if needed
-            if self._native_rate != self._target_rate:
-                from scipy.signal import resample
-                target_len = int(len(mono) * self._target_rate / self._native_rate)
-                mono = resample(mono, target_len).astype(np.float32)
+            # Stateful polyphase resample. _Resampler carries odd-length
+            # remainders across callbacks so there's no discontinuity at
+            # chunk boundaries.
+            if self._resampler is not None:
+                mono = self._resampler.push(mono)
+
+            if mono.size == 0:
+                return (None, pyaudio.paContinue)
 
             self._all_chunks.append(mono)
             if self._level_callback is not None:
