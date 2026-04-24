@@ -56,6 +56,15 @@ class MainWindow(QMainWindow):
         self._gain_save_timer.setSingleShot(True)
         self._gain_save_timer.timeout.connect(self._flush_gain_to_config)
 
+        # Auto-record threshold: require sustained app activity before
+        # actually starting recording, so brief blips (Teams chime, a
+        # single notification sound) don't kick off a session that then
+        # silence-stops. Timer started on apps_became_active, rechecks
+        # state on fire.
+        self._auto_record_timer = QTimer(self)
+        self._auto_record_timer.setSingleShot(True)
+        self._auto_record_timer.timeout.connect(self._on_auto_record_timer_fired)
+
         self.setWindowTitle("TalkTrack - Call Recorder, Transcriber & AI Summary")
         self.setMinimumSize(1000, 700)
         self.resize(1260, 800)
@@ -328,6 +337,10 @@ class MainWindow(QMainWindow):
         self.action_items_panel.regenerate_requested.connect(self._regenerate_summary)
 
     def _start_recording(self):
+        # Any pending auto-record arm becomes moot once recording starts.
+        if self._auto_record_timer.isActive():
+            self._auto_record_timer.stop()
+
         mic = self.source_selector.get_selected_mic()
         mic2 = self.source_selector.get_selected_mic2()
         capture_mode = self.source_selector.get_capture_mode()
@@ -522,6 +535,12 @@ class MainWindow(QMainWindow):
 
     def _on_apps_went_inactive(self):
         """Auto-stop recording when all selected apps leave their call."""
+        # Also cancel a pending auto-record arm: activity dropped before
+        # the sustained-activity threshold elapsed.
+        if self._auto_record_timer.isActive():
+            self._auto_record_timer.stop()
+            logger.info("Auto-record cancelled: apps went inactive before threshold")
+            self.status_label.setText("Ready")
         if self.recorder.state in (RecordingState.RECORDING, RecordingState.PAUSED):
             if self.source_selector.is_per_app_mode():
                 logger.warning("Auto-stop: selected apps went inactive (per-app mode)")
@@ -543,13 +562,45 @@ class MainWindow(QMainWindow):
             self.recorder.stop_recording()
 
     def _on_apps_became_active(self):
-        """Auto-start recording when a checked app starts a call."""
+        """Schedule auto-record after a sustained-activity threshold.
+
+        A bare pycaw active-session edge isn't enough — a Teams message
+        chime flips the edge briefly, then the session clears and the
+        recorder silence-stops. The threshold delays the start and
+        rechecks app activity before firing; short blips miss the cutoff.
+        """
         if self.recorder.state != RecordingState.IDLE:
             return
         if not self.config.get("general", "auto_record"):
             return
         if not self.source_selector.is_per_app_mode():
             return
+
+        threshold = max(0, int(self.config.get("general", "auto_record_threshold")))
+        if threshold == 0:
+            self.status_label.setText("Call detected — auto-recording...")
+            self._start_recording()
+            return
+
+        self.status_label.setText(
+            f"Call detected — confirming {threshold}s of sustained activity..."
+        )
+        self._auto_record_timer.start(threshold * 1000)
+        logger.info("Auto-record armed: waiting %ds for sustained activity", threshold)
+
+    def _on_auto_record_timer_fired(self):
+        """Threshold elapsed — start only if apps still active."""
+        if self.recorder.state != RecordingState.IDLE:
+            return
+        if not self.config.get("general", "auto_record"):
+            return
+        if not self.source_selector.is_per_app_mode():
+            return
+        if not self.source_selector.has_active_checked_apps():
+            logger.info("Auto-record cancelled: activity did not persist past threshold")
+            self.status_label.setText("Ready")
+            return
+        logger.info("Auto-record firing after sustained-activity threshold")
         self.status_label.setText("Call detected — auto-recording...")
         self._start_recording()
 
@@ -1232,6 +1283,8 @@ class MainWindow(QMainWindow):
         if self._gain_save_timer.isActive():
             self._gain_save_timer.stop()
             self._flush_gain_to_config()
+        if self._auto_record_timer.isActive():
+            self._auto_record_timer.stop()
         if hasattr(self, "mic_monitor"):
             self.mic_monitor.stop()
         if hasattr(self, "mic_monitor_2"):

@@ -318,6 +318,15 @@ class SourceSelector(QWidget):
         self._had_active_apps = any_checked_active
         self._update_section_title()
 
+    def has_active_checked_apps(self):
+        """Whether any checked app is currently reported as active.
+
+        Reflects the most recent poll of get_active_audio_apps(). Used by
+        the auto-record threshold to confirm sustained activity before
+        starting a recording.
+        """
+        return bool(self._had_active_apps)
+
     def refresh_devices(self):
         # Block signals while rebuilding combos so clear/addItem don't
         # trigger _save_mic_selection with stale values

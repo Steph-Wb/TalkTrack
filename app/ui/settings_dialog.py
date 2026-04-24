@@ -47,6 +47,18 @@ class SettingsDialog(QDialog):
         )
         recording_form.addRow(self.auto_record_cb)
 
+        self.auto_record_threshold_spin = QSpinBox()
+        self.auto_record_threshold_spin.setRange(0, 60)
+        self.auto_record_threshold_spin.setSuffix(" seconds")
+        self.auto_record_threshold_spin.setSpecialValueText("Start immediately")
+        self.auto_record_threshold_spin.setToolTip(
+            "Require sustained app activity for this many seconds before\n"
+            "auto-recording actually starts. Prevents brief sounds (like\n"
+            "a Teams message chime) from kicking off a recording that\n"
+            "then silence-stops. Set to 0 to disable the threshold."
+        )
+        recording_form.addRow("Auto-record threshold:", self.auto_record_threshold_spin)
+
         self.auto_transcribe_cb = QCheckBox("Automatically transcribe after recording")
         self.auto_transcribe_cb.setToolTip(
             "When checked, TalkTrack runs Whisper on the recording as soon\n"
@@ -356,6 +368,9 @@ class SettingsDialog(QDialog):
         min_rec = self.config.get("general", "min_recording_length")
         self.min_recording_spin.setValue(min_rec if min_rec else 0)
         self.auto_record_cb.setChecked(self.config.get("general", "auto_record"))
+        self.auto_record_threshold_spin.setValue(
+            self.config.get("general", "auto_record_threshold")
+        )
         self.auto_transcribe_cb.setChecked(self.config.get("general", "auto_transcribe"))
         self.silence_auto_stop_cb.setChecked(self.config.get("general", "silence_auto_stop"))
         self.silence_duration_spin.setValue(self.config.get("general", "silence_duration"))
@@ -444,6 +459,9 @@ class SettingsDialog(QDialog):
     def _save_and_close(self):
         self.config.set("general", "min_recording_length", self.min_recording_spin.value())
         self.config.set("general", "auto_record", self.auto_record_cb.isChecked())
+        self.config.set(
+            "general", "auto_record_threshold", self.auto_record_threshold_spin.value()
+        )
         self.config.set("general", "auto_transcribe", self.auto_transcribe_cb.isChecked())
         self.config.set("general", "silence_auto_stop", self.silence_auto_stop_cb.isChecked())
         self.config.set("general", "silence_duration", self.silence_duration_spin.value())

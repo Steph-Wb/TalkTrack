@@ -47,6 +47,7 @@ DEFAULT_CONFIG = {
     "general": {
         "min_recording_length": 5,
         "auto_record": False,
+        "auto_record_threshold": 5,
         "auto_transcribe": True,
         "silence_auto_stop": True,
         "silence_duration": 120,
