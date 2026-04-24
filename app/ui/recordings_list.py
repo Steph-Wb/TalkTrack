@@ -1,6 +1,9 @@
 import json
+import logging
 import os
+import stat
 import subprocess
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -15,11 +18,49 @@ from PyQt6.QtGui import QAction
 
 from app.ui.search_bar import SearchBar
 
+logger = logging.getLogger(__name__)
+
+
+def _rmtree_robust(directory, retries=4, initial_delay=0.1):
+    """shutil.rmtree with Windows-friendly retry + read-only handling.
+
+    Windows holds transient locks from Explorer/indexer/Defender on just-
+    touched audio files. A plain rmtree races with those locks and can
+    leave the folder intact. This retries with exponential backoff and
+    chmods read-only files writable before removing.
+    """
+    def onerror(func, path, exc_info):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception:
+            pass
+
+    last_exc = None
+    delay = initial_delay
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(directory, onerror=onerror)
+            if not Path(directory).exists():
+                return
+            last_exc = OSError(f"rmtree returned but path still exists: {directory}")
+        except Exception as e:
+            last_exc = e
+        logger.warning(
+            "rmtree attempt %d failed for %s: %s", attempt + 1, directory, last_exc
+        )
+        time.sleep(delay)
+        delay *= 2
+    raise last_exc
+
 
 class RecordingsList(QWidget):
     """Browse and manage past recordings."""
 
     recording_selected = pyqtSignal(dict)  # metadata dict
+    about_to_delete = pyqtSignal(str)      # directory path — emitted BEFORE rmtree
+                                           # so main_window can release caches and
+                                           # stop playback on the target files
     recording_deleted = pyqtSignal(str)    # directory path of deleted recording
     search_result_selected = pyqtSignal(str, float)  # recording_id, timestamp
 
@@ -164,9 +205,14 @@ class RecordingsList(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # Notify listeners FIRST so they can stop playback, clear caches,
+        # and release any file handles before the tree comes down.
+        self.about_to_delete.emit(directory)
+
         try:
-            shutil.rmtree(directory)
+            _rmtree_robust(directory)
         except Exception as e:
+            logger.exception("Failed to delete recording dir: %s", directory)
             QMessageBox.warning(self, "Error", f"Failed to delete: {e}")
             return
 
@@ -197,10 +243,12 @@ class RecordingsList(QWidget):
 
         for meta in recordings:
             directory = meta.get("directory", "")
+            self.about_to_delete.emit(directory)
             try:
-                shutil.rmtree(directory)
+                _rmtree_robust(directory)
                 self.recording_deleted.emit(directory)
             except Exception as e:
+                logger.exception("Failed to delete recording dir: %s", directory)
                 QMessageBox.warning(self, "Error", f"Failed to delete {Path(directory).name}: {e}")
 
         self.refresh()

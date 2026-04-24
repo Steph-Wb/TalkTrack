@@ -311,6 +311,7 @@ class MainWindow(QMainWindow):
 
         # Recordings list
         self.recordings_list.recording_selected.connect(self._on_recording_selected)
+        self.recordings_list.about_to_delete.connect(self._on_recording_about_to_delete)
         self.recordings_list.recording_deleted.connect(self._on_recording_deleted)
         self.recordings_list.search_result_selected.connect(self._on_search_result_selected)
 
@@ -847,6 +848,17 @@ class MainWindow(QMainWindow):
             self._flag_error_notification()
         else:
             QMessageBox.warning(self, "Transcription Error", error_msg)
+
+    def _on_recording_about_to_delete(self, directory):
+        """Release any file handles on the session about to be deleted.
+
+        Runs BEFORE rmtree so SegmentPlayer's cached audio data is cleared
+        and any active playback is stopped. Without this, a Windows file
+        lock on the WAV can leave the session folder partially removed.
+        """
+        if self._current_session and self._current_session.get("directory") == directory:
+            # Clearing the audio path stops the player and clears its cache.
+            self.transcript_viewer.set_audio_path(None)
 
     def _on_recording_deleted(self, directory):
         """Clear UI if the deleted recording was currently loaded."""
