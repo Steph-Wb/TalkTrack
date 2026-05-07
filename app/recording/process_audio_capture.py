@@ -6,11 +6,14 @@ This module provides a pipeline for capturing audio from specific PIDs
 and mixing the results into a single output stream.
 """
 import logging
+import os
+import tempfile
 import threading
 import time
 from math import gcd
 import numpy as np
 import soundfile as sf
+from pathlib import Path
 from scipy.signal import resample_poly
 
 from app.utils.platform_info import is_windows_11
@@ -334,7 +337,9 @@ class ProcessAudioCapture:
         self._streams = {}                     # {pid: ProcessCaptureStream}
         self._running = False
         self._paused = False
-        self._all_chunks = []
+        self._all_chunks = []   # used only when _sf_writer is None (tests / no-start)
+        self._sf_writer = None  # soundfile writer; open when enable_buffer and started
+        self._tmp_path = None   # path to the streaming temp wav file
         self._thread = None
         self._active_last_tick = set()
         self._crashed = False
@@ -389,7 +394,10 @@ class ProcessAudioCapture:
                         self._streams[pid].put_back_tail(tail)
                     if mixed.size > 0:
                         if self._enable_buffer:
-                            self._all_chunks.append(mixed)
+                            if self._sf_writer is not None:
+                                self._sf_writer.write(mixed)
+                            else:
+                                self._all_chunks.append(mixed)
                         if self._level_callback:
                             self._level_callback(mixed)
 
@@ -461,6 +469,25 @@ class ProcessAudioCapture:
         }
         self.capture_status = status
 
+        # Open streaming temp file when buffering is enabled and we have active streams.
+        if self._enable_buffer and active_pids:
+            if self._sf_writer is not None:
+                self._sf_writer.close()
+                self._sf_writer = None
+            if self._tmp_path:
+                Path(self._tmp_path).unlink(missing_ok=True)
+                self._tmp_path = None
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            os.close(tmp_fd)
+            try:
+                self._sf_writer = sf.SoundFile(
+                    tmp_path, 'w', samplerate=self.sample_rate,
+                    channels=1, format='WAV', subtype='FLOAT',
+                )
+                self._tmp_path = tmp_path
+            except Exception:
+                Path(tmp_path).unlink(missing_ok=True)
+
         # Launch the mixer only if at least one stream is active.
         if active_pids:
             self._running = True
@@ -476,17 +503,18 @@ class ProcessAudioCapture:
             self._thread.join(timeout=2.0)
             self._thread = None
 
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
+
         for s in self._streams.values():
             try:
                 s.release()
             except Exception:
                 logger.exception("Error releasing stream %s", s.pid)
 
-        mixed = (np.concatenate(self._all_chunks, axis=0)
-                 if self._all_chunks else np.array([], dtype=np.float32))
-
         result = {
-            "mixed_audio": mixed,
+            "mixed_audio": self.get_audio_data(),
             "active_pids": self.active_pids,
             "crashed": self._crashed,
         }
@@ -494,7 +522,22 @@ class ProcessAudioCapture:
 
     def save_to_file(self, filepath):
         """Write buffered mixed audio to a WAV file. Returns the path, or None if empty."""
-        import soundfile as sf
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            self._tmp_path = None
+            if tmp.exists():
+                try:
+                    if sf.info(str(tmp)).frames > 0:
+                        tmp.rename(filepath)
+                        return str(filepath)
+                except Exception:
+                    pass
+                tmp.unlink(missing_ok=True)
+            return None
+        # Fallback: in-memory chunks (used in tests / paths that skip start())
         if not self._all_chunks:
             return None
         data = np.concatenate(self._all_chunks, axis=0)
@@ -505,6 +548,14 @@ class ProcessAudioCapture:
 
     def get_audio_data(self):
         """Return buffered mixed audio as a mono float32 array."""
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            if tmp.exists():
+                try:
+                    data, _ = sf.read(str(tmp), dtype='float32')
+                    return data
+                except Exception:
+                    pass
         if not self._all_chunks:
             return np.array([], dtype=np.float32)
         return np.concatenate(self._all_chunks, axis=0)

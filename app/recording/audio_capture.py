@@ -1,7 +1,8 @@
 import logging
+import os
+import tempfile
 import threading
 import time
-import queue
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -22,10 +23,11 @@ class AudioStream:
         self.channels = channels
         self._level_callback = level_callback
         self._stream = None
-        self._buffer = queue.Queue()
         self._recording = False
         self._paused = False
-        self._all_chunks = []
+        self._all_chunks = []   # used only when _sf_writer is None (tests / no-start)
+        self._sf_writer = None  # soundfile writer; open during real recordings
+        self._tmp_path = None   # path to the streaming temp wav file
         self._muted = False
         self._gain = 1.0
 
@@ -39,8 +41,10 @@ class AudioStream:
                 np.clip(chunk, -1.0, 1.0, out=chunk)
             if self._muted:
                 chunk.fill(0.0)
-            self._buffer.put(chunk)
-            self._all_chunks.append(chunk)
+            if self._sf_writer is not None:
+                self._sf_writer.write(chunk)
+            else:
+                self._all_chunks.append(chunk)
             if self._level_callback is not None:
                 self._level_callback(chunk)
 
@@ -48,7 +52,26 @@ class AudioStream:
         self._recording = True
         self._paused = False
         self._all_chunks = []
-
+        # Clean up any leftover temp file from a previous session
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
+        if self._tmp_path:
+            Path(self._tmp_path).unlink(missing_ok=True)
+            self._tmp_path = None
+        # Open a temp file so audio streams to disk instead of accumulating in RAM
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(tmp_fd)
+        try:
+            self._sf_writer = sf.SoundFile(
+                tmp_path, 'w', samplerate=self.sample_rate,
+                channels=self.channels, format='WAV', subtype='FLOAT',
+            )
+            self._tmp_path = tmp_path
+        except Exception:
+            Path(tmp_path).unlink(missing_ok=True)
+            self._recording = False
+            raise
         try:
             self._stream = sd.InputStream(
                 device=self.device_index,
@@ -60,6 +83,10 @@ class AudioStream:
             self._stream.start()
         except Exception as e:
             self._recording = False
+            self._sf_writer.close()
+            self._sf_writer = None
+            Path(self._tmp_path).unlink(missing_ok=True)
+            self._tmp_path = None
             raise RuntimeError(f"Failed to start audio stream on device {self.device_index}: {e}")
 
     def pause(self):
@@ -82,15 +109,42 @@ class AudioStream:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
 
     def get_audio_data(self):
-        """Return all recorded audio as a numpy array."""
+        """Return all recorded audio as a float32 numpy array."""
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            if tmp.exists():
+                try:
+                    data, _ = sf.read(str(tmp), dtype='float32', always_2d=True)
+                    return data
+                except Exception:
+                    pass
         if not self._all_chunks:
             return np.array([], dtype=np.float32)
         return np.concatenate(self._all_chunks, axis=0)
 
     def save_to_file(self, filepath):
         """Save recorded audio to a WAV file."""
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            self._tmp_path = None
+            if tmp.exists():
+                try:
+                    if sf.info(str(tmp)).frames > 0:
+                        tmp.rename(filepath)
+                        return str(filepath)
+                except Exception:
+                    pass
+                tmp.unlink(missing_ok=True)
+            return None
+        # Fallback: in-memory chunks (used in tests / paths that skip start())
         data = self.get_audio_data()
         if data.size == 0:
             return None
@@ -113,7 +167,9 @@ class LoopbackStream:
         self._pa = None
         self._recording = False
         self._paused = False
-        self._all_chunks = []
+        self._all_chunks = []   # used only when _sf_writer is None (tests / no-start)
+        self._sf_writer = None  # soundfile writer; open during real recordings
+        self._tmp_path = None   # path to the streaming temp wav file
         self._native_rate = None
         self._native_channels = None
         # Polyphase resampler built on start() once native_rate is known.
@@ -166,6 +222,13 @@ class LoopbackStream:
         self._recording = True
         self._paused = False
         self._all_chunks = []
+        # Clean up any leftover temp file from a previous session
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
+        if self._tmp_path:
+            Path(self._tmp_path).unlink(missing_ok=True)
+            self._tmp_path = None
 
         loopback_dev = self._find_loopback_device()
         self._native_rate = int(loopback_dev["defaultSampleRate"])
@@ -178,6 +241,20 @@ class LoopbackStream:
         )
 
         self._resampler = _Resampler(self._native_rate, self._target_rate)
+
+        # Open a temp file so audio streams to disk instead of accumulating in RAM
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(tmp_fd)
+        try:
+            self._sf_writer = sf.SoundFile(
+                tmp_path, 'w', samplerate=self._target_rate,
+                channels=1, format='WAV', subtype='FLOAT',
+            )
+            self._tmp_path = tmp_path
+        except Exception:
+            Path(tmp_path).unlink(missing_ok=True)
+            self._recording = False
+            raise
 
         self._stream = self._pa.open(
             format=pyaudio.paFloat32,
@@ -213,7 +290,10 @@ class LoopbackStream:
             if mono.size == 0:
                 return (None, pyaudio.paContinue)
 
-            self._all_chunks.append(mono)
+            if self._sf_writer is not None:
+                self._sf_writer.write(mono)
+            else:
+                self._all_chunks.append(mono)
             if self._level_callback is not None:
                 self._level_callback(mono)
 
@@ -234,13 +314,40 @@ class LoopbackStream:
         if self._pa:
             self._pa.terminate()
             self._pa = None
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
 
     def get_audio_data(self):
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            if tmp.exists():
+                try:
+                    data, _ = sf.read(str(tmp), dtype='float32')
+                    return data
+                except Exception:
+                    pass
         if not self._all_chunks:
             return np.array([], dtype=np.float32)
         return np.concatenate(self._all_chunks, axis=0)
 
     def save_to_file(self, filepath):
+        if self._sf_writer is not None:
+            self._sf_writer.close()
+            self._sf_writer = None
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            self._tmp_path = None
+            if tmp.exists():
+                try:
+                    if sf.info(str(tmp)).frames > 0:
+                        tmp.rename(filepath)
+                        return str(filepath)
+                except Exception:
+                    pass
+                tmp.unlink(missing_ok=True)
+            return None
+        # Fallback: in-memory chunks (used in tests / paths that skip start())
         data = self.get_audio_data()
         if data.size == 0:
             return None
@@ -280,7 +387,8 @@ class DualAudioCapture:
         self._silence_callback = None
         self._silent_since = None  # timestamp when silence started
         self._silence_fired = False  # only fire once per silence stretch
-        self._last_mic_active_time = None  # updated from mic callbacks
+        self._last_mic_active_time = None  # written by mic thread, read by system thread
+        self._mic_activity_lock = threading.Lock()  # guards _last_mic_active_time
         self._muted = False
         self.mic_gain = 1.0
         self._pid_lost_callback = None
@@ -566,7 +674,8 @@ class DualAudioCapture:
         """
         rms = float(np.sqrt(np.mean(chunk ** 2)))
         if rms >= self._silence_threshold:
-            self._last_mic_active_time = time.time()
+            with self._mic_activity_lock:
+                self._last_mic_active_time = time.time()
 
     def _check_silence(self, chunk):
         """Check system audio chunk for silence, fire callback if sustained.
@@ -579,9 +688,11 @@ class DualAudioCapture:
             return
         rms = float(np.sqrt(np.mean(chunk ** 2)))
         now = time.time()
+        with self._mic_activity_lock:
+            last_mic = self._last_mic_active_time
         mic_recent = (
-            self._last_mic_active_time is not None
-            and (now - self._last_mic_active_time) < self._silence_duration
+            last_mic is not None
+            and (now - last_mic) < self._silence_duration
         )
         if rms < self._silence_threshold and not mic_recent:
             if self._silent_since is None:
