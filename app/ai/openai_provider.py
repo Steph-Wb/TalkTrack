@@ -20,7 +20,7 @@ class OpenAIProvider(AIProvider):
             model=self._model,
             messages=messages,
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         response = self._client.embeddings.create(

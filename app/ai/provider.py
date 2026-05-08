@@ -13,8 +13,5 @@ class AIProvider(ABC):
         ...
 
     def test_connection(self) -> bool:
-        try:
-            result = self.complete("Say 'ok'.", "")
-            return bool(result)
-        except Exception:
-            return False
+        result = self.complete("Say 'ok'.", "")
+        return bool(result)

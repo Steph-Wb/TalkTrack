@@ -94,5 +94,47 @@ class TestProviderInterface(unittest.TestCase):
             AIProvider()
 
 
+class TestProviderTestConnection(unittest.TestCase):
+
+    def _make_failing(self):
+        from app.ai.provider import AIProvider
+        class FailingProvider(AIProvider):
+            def complete(self, prompt, context=""):
+                raise ValueError("bad key")
+            def embed(self, texts):
+                return []
+        return FailingProvider()
+
+    def _make_empty(self):
+        from app.ai.provider import AIProvider
+        class EmptyProvider(AIProvider):
+            def complete(self, prompt, context=""):
+                return ""
+            def embed(self, texts):
+                return []
+        return EmptyProvider()
+
+    def _make_ok(self):
+        from app.ai.provider import AIProvider
+        class OkProvider(AIProvider):
+            def complete(self, prompt, context=""):
+                return "ok"
+            def embed(self, texts):
+                return []
+        return OkProvider()
+
+    def test_connection_propagates_exception(self):
+        """test_connection() must NOT swallow exceptions — caller needs the real error."""
+        with self.assertRaises(ValueError):
+            self._make_failing().test_connection()
+
+    def test_connection_returns_false_for_empty_response(self):
+        """Empty string from complete() → False without raising."""
+        self.assertFalse(self._make_empty().test_connection())
+
+    def test_connection_returns_true_for_ok_response(self):
+        self.assertTrue(self._make_ok().test_connection())
+
+
 if __name__ == "__main__":
     unittest.main()
