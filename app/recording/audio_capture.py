@@ -568,25 +568,35 @@ class DualAudioCapture:
 
         results = {"mic": None, "system": None, "combined": None}
 
+        # Stop all streams before reading data.
         if self.mic_stream:
             self.mic_stream.stop()
         if self.mic_stream_2:
             self.mic_stream_2.stop()
+        if self.system_stream:
+            self.system_stream.stop()
 
-        # Mix mic streams and save
+        # Read audio data while all _tmp_paths are still valid.
         mic_data = self._get_mixed_mic_data()
+
+        # Build combined BEFORE save_to_file() clears system _tmp_path.
+        combined = self._create_combined_audio()
+
+        # Save individual tracks.
         if mic_data.size > 0:
             mic_path = self.output_dir / "mic_audio.wav"
             sf.write(str(mic_path), mic_data, self.sample_rate)
             results["mic"] = str(mic_path)
+            # Clean up mic temp files now that data is saved.
+            for s in (self.mic_stream, self.mic_stream_2):
+                if s and s._tmp_path:
+                    Path(s._tmp_path).unlink(missing_ok=True)
+                    s._tmp_path = None
 
         if self.system_stream:
-            self.system_stream.stop()
             sys_path = self.output_dir / "system_audio.wav"
             results["system"] = self.system_stream.save_to_file(sys_path)
 
-        # Create combined audio for transcription
-        combined = self._create_combined_audio()
         if combined is not None:
             combined_path = self.output_dir / "combined_audio.wav"
             sf.write(str(combined_path), combined, self.sample_rate)

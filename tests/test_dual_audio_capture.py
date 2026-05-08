@@ -1,5 +1,10 @@
 """Tests for DualAudioCapture per-app mode integration."""
+import os
+import tempfile
 import unittest
+import numpy as np
+from pathlib import Path
+import soundfile as sf
 
 
 class TestDualAudioCaptureMode(unittest.TestCase):
@@ -401,6 +406,103 @@ class TestSilenceDetectionMicGuard(unittest.TestCase):
         time.sleep(0.8)
         cap._check_silence(silent_sys)
         self.assertEqual(len(self.fired), 1)
+
+
+class FakeSoundfileSystemStream:
+    """System-stream test double backed by a real soundfile temp file.
+
+    Mirrors the _tmp_path / save_to_file / get_audio_data contract of
+    LoopbackStream and ProcessAudioCapture after the streaming refactor.
+    """
+    def __init__(self, data, sample_rate=16000):
+        fd, tmp = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        self._tmp_path = tmp
+        self._sf_writer = None
+        sf.write(tmp, data, sample_rate)
+
+    def stop(self):
+        pass
+
+    def get_audio_data(self):
+        if self._tmp_path and Path(self._tmp_path).exists():
+            data, _ = sf.read(self._tmp_path, dtype="float32")
+            return data
+        return np.array([], dtype=np.float32)
+
+    def save_to_file(self, filepath):
+        if self._tmp_path:
+            tmp = Path(self._tmp_path)
+            self._tmp_path = None
+            if tmp.exists():
+                tmp.rename(filepath)
+                return str(filepath)
+        return None
+
+
+class TestDualAudioCaptureStop(unittest.TestCase):
+    """DualAudioCapture.stop() must include system audio in combined_audio.wav.
+
+    Regression guard for the streaming refactor: save_to_file() clears
+    _tmp_path on the system stream; combined audio must be created before
+    that happens, or the system track is silently dropped.
+    """
+
+    def setUp(self):
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.out_dir = Path(self._tmp_dir.name) / "session"
+        self.out_dir.mkdir()
+
+    def tearDown(self):
+        self._tmp_dir.cleanup()
+
+    def _make_cap(self, mic_data=None, sys_data=None):
+        from app.recording.audio_capture import DualAudioCapture, AudioStream
+        cap = DualAudioCapture(mic_device=None, loopback_device=None)
+        cap.output_dir = self.out_dir
+
+        if sys_data is not None:
+            cap.system_stream = FakeSoundfileSystemStream(sys_data)
+
+        if mic_data is not None:
+            cap.mic_stream = AudioStream(device_index=None, sample_rate=16000, channels=1)
+            cap.mic_stream._all_chunks = [mic_data.reshape(-1, 1)]
+
+        return cap
+
+    def test_combined_includes_system_audio(self):
+        """System audio must survive into combined_audio.wav."""
+        sys_data = np.full(16000, 0.5, dtype=np.float32)
+        mic_data = np.zeros(16000, dtype=np.float32)   # silent mic
+
+        cap = self._make_cap(mic_data=mic_data, sys_data=sys_data)
+        results = cap.stop()
+
+        combined_path = results.get("combined")
+        self.assertIsNotNone(combined_path, "combined_audio.wav must be created")
+        combined, _ = sf.read(combined_path, dtype="float32")
+        self.assertGreater(
+            float(np.abs(combined).max()), 0.1,
+            "combined_audio.wav must contain system audio, not only silence",
+        )
+
+    def test_system_audio_wav_saved(self):
+        """system_audio.wav must still be written after the reorder."""
+        sys_data = np.full(16000, 0.3, dtype=np.float32)
+        cap = self._make_cap(sys_data=sys_data)
+        results = cap.stop()
+
+        sys_path = results.get("system")
+        self.assertIsNotNone(sys_path)
+        self.assertTrue(Path(sys_path).exists())
+
+    def test_no_system_stream_still_works(self):
+        """stop() must not crash when there is no system stream."""
+        mic_data = np.full(16000, 0.2, dtype=np.float32)
+        cap = self._make_cap(mic_data=mic_data, sys_data=None)
+        results = cap.stop()
+        self.assertIsNotNone(results.get("mic"))
+        self.assertIsNone(results.get("system"))
 
 
 if __name__ == "__main__":
