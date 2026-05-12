@@ -44,6 +44,13 @@ def create_provider(config: dict) -> AIProvider | None:
             model=config.get("model", "mistral-large-latest"),
         )
 
+    if provider_type == "deepseek":
+        from app.ai.deepseek_provider import DeepSeekProvider
+        return DeepSeekProvider(
+            api_key=config["api_key"],
+            model=config.get("model", "deepseek-chat"),
+        )
+
     if provider_type == "local":
         from app.ai.local_provider import LocalProvider
         return LocalProvider(
