@@ -297,6 +297,7 @@ class SettingsDialog(QDialog):
         self.ai_provider_combo.addItem("Grok (xAI)", "grok")
         self.ai_provider_combo.addItem("Gemini (Google)", "gemini")
         self.ai_provider_combo.addItem("Mistral", "mistral")
+        self.ai_provider_combo.addItem("DeepSeek", "deepseek")
         self.ai_provider_combo.addItem("Local Model", "local")
         self.ai_provider_combo.currentIndexChanged.connect(self._on_ai_provider_changed)
         ai_form.addRow("Provider:", self.ai_provider_combo)
@@ -530,7 +531,7 @@ class SettingsDialog(QDialog):
 
         provider = self.ai_provider_combo.currentData()
         self._current_provider = provider
-        is_api = provider in ("claude", "openai", "grok", "gemini", "mistral")
+        is_api = provider in ("claude", "openai", "grok", "gemini", "mistral", "deepseek")
         is_local = provider == "local"
         self.ai_api_key.setVisible(is_api)
         self.ai_api_key_label.setVisible(is_api)
@@ -548,6 +549,8 @@ class SettingsDialog(QDialog):
             self.ai_model.addItems(["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"])
         elif provider == "mistral":
             self.ai_model.addItems(["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"])
+        elif provider == "deepseek":
+            self.ai_model.addItems(["deepseek-chat", "deepseek-reasoner"])
         elif provider == "local":
             self.ai_model.addItem("(set path below)")
 
@@ -585,7 +588,7 @@ class SettingsDialog(QDialog):
     def _update_api_key_status(self):
         """Show a status indicator for whether an API key is configured."""
         provider = self.ai_provider_combo.currentData()
-        is_api = provider in ("claude", "openai", "grok", "gemini", "mistral")
+        is_api = provider in ("claude", "openai", "grok", "gemini", "mistral", "deepseek")
         if not is_api:
             self.ai_key_status.setVisible(False)
             return

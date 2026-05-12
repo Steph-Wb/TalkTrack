@@ -11,6 +11,7 @@ PROVIDER_PACKAGES = {
     "grok": ("openai", "openai>=1.50.0", "OpenAI SDK (used by Grok)"),
     "gemini": ("google.generativeai", "google-generativeai>=0.8.0", "Google Generative AI SDK"),
     "mistral": ("mistralai", "mistralai>=1.0.0", "Mistral AI SDK"),
+    "deepseek": ("openai", "openai>=1.50.0", "OpenAI SDK (used by DeepSeek)"),
     "local": ("llama_cpp", "llama-cpp-python>=0.3.0", "llama.cpp Python bindings"),
 }
 
