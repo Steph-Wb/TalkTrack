@@ -18,6 +18,8 @@ class SummaryPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        self._raw_markdown = ""
+
         self._status = QLabel("No summary generated yet.")
         self._status.setStyleSheet("color: #a6adc8; padding: 8px;")
         layout.addWidget(self._status)
@@ -49,6 +51,11 @@ class SummaryPanel(QWidget):
         self._copy_btn.setVisible(False)
         btn_row.addWidget(self._copy_btn)
 
+        self._copy_md_btn = QPushButton("Copy MD")
+        self._copy_md_btn.clicked.connect(self._copy_markdown)
+        self._copy_md_btn.setVisible(False)
+        btn_row.addWidget(self._copy_md_btn)
+
         self._gen_btn = QPushButton("Generate Summary")
         self._gen_btn.clicked.connect(self.regenerate_requested.emit)
         self._gen_btn.setVisible(False)
@@ -58,9 +65,11 @@ class SummaryPanel(QWidget):
         layout.addLayout(btn_row)
 
     def set_summary(self, text):
+        self._raw_markdown = text
         self._text.setMarkdown(text)
         self._text.setVisible(True)
         self._copy_btn.setVisible(True)
+        self._copy_md_btn.setVisible(True)
         self._gen_btn.setText("Regenerate")
         self._gen_btn.setVisible(True)
         self._instruction_input.setVisible(True)
@@ -68,9 +77,11 @@ class SummaryPanel(QWidget):
 
     def clear(self):
         """Reset to initial empty state."""
+        self._raw_markdown = ""
         self._text.clear()
         self._text.setVisible(False)
         self._copy_btn.setVisible(False)
+        self._copy_md_btn.setVisible(False)
         self._gen_btn.setVisible(False)
         self._instruction_input.clear()
         self._instruction_input.setVisible(False)
@@ -87,6 +98,8 @@ class SummaryPanel(QWidget):
         self._status.setText("Generating summary...")
         self._status.setVisible(True)
         self._gen_btn.setVisible(False)
+        self._copy_btn.setVisible(False)
+        self._copy_md_btn.setVisible(False)
         self._instruction_input.setVisible(False)
         self._text.setVisible(False)
 
@@ -99,3 +112,6 @@ class SummaryPanel(QWidget):
 
     def _copy(self):
         QApplication.clipboard().setText(self._text.toPlainText())
+
+    def _copy_markdown(self):
+        QApplication.clipboard().setText(self._raw_markdown)
