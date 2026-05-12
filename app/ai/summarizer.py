@@ -25,11 +25,23 @@ def _format_instruction(instruction):
     return f"\n\nADDITIONAL INSTRUCTIONS FROM USER:\n{instruction.strip()}"
 
 
-def build_summary_prompt(segments, speaker_names, notes="", instruction=""):
+def _format_language(language):
+    if not language or not language.strip():
+        return ""
+    return (
+        f"IMPORTANT: Write your response in the language with code "
+        f'"{language.strip()}". Do not translate the transcript — only your '
+        f"analysis should be in that language.\n\n"
+    )
+
+
+def build_summary_prompt(segments, speaker_names, notes="", instruction="", output_language=""):
     transcript_text = _format_transcript(segments, speaker_names)
     notes_text = _format_notes(notes)
     instruction_text = _format_instruction(instruction)
+    language_text = _format_language(output_language)
     return (
+        f"{language_text}"
         "Below is a transcript of a meeting. Please provide a concise summary "
         "covering: key discussion points, decisions made, and outcomes.\n\n"
         "If user notes are included, incorporate any relevant context from them "
@@ -41,11 +53,13 @@ def build_summary_prompt(segments, speaker_names, notes="", instruction=""):
     )
 
 
-def build_action_items_prompt(segments, speaker_names, notes="", instruction=""):
+def build_action_items_prompt(segments, speaker_names, notes="", instruction="", output_language=""):
     transcript_text = _format_transcript(segments, speaker_names)
     notes_text = _format_notes(notes)
     instruction_text = _format_instruction(instruction)
+    language_text = _format_language(output_language)
     return (
+        f"{language_text}"
         "Below is a transcript of a meeting. Extract all action items — tasks, "
         "follow-ups, or commitments made by participants.\n\n"
         "If user notes are included, also extract any action items from them.\n\n"

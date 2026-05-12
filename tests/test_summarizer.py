@@ -61,5 +61,39 @@ class TestParseActionItems(unittest.TestCase):
         self.assertEqual(items, [])
 
 
+class TestSummaryLanguage(unittest.TestCase):
+
+    def _seg(self):
+        from app.transcription.transcriber import TranscriptSegment
+        return [TranscriptSegment(0.0, 5.0, "Hello.", speaker="Alice")]
+
+    def test_build_summary_prompt_with_language(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(self._seg(), {"Alice": "Alice"}, output_language="de")
+        self.assertIn("de", prompt)
+        self.assertIn("IMPORTANT", prompt)
+
+    def test_build_summary_prompt_no_language_directive_when_empty(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(self._seg(), {"Alice": "Alice"}, output_language="")
+        self.assertNotIn("IMPORTANT", prompt)
+
+    def test_build_action_items_prompt_with_language(self):
+        from app.ai.summarizer import build_action_items_prompt
+        prompt = build_action_items_prompt(self._seg(), {"Alice": "Alice"}, output_language="fr")
+        self.assertIn("fr", prompt)
+        self.assertIn("IMPORTANT", prompt)
+
+    def test_build_action_items_prompt_no_language_directive_when_empty(self):
+        from app.ai.summarizer import build_action_items_prompt
+        prompt = build_action_items_prompt(self._seg(), {"Alice": "Alice"}, output_language="")
+        self.assertNotIn("IMPORTANT", prompt)
+
+    def test_language_directive_comes_first(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(self._seg(), {"Alice": "Alice"}, output_language="ja")
+        self.assertTrue(prompt.startswith("IMPORTANT"), "language directive must be first")
+
+
 if __name__ == "__main__":
     unittest.main()

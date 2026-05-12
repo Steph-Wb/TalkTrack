@@ -343,6 +343,13 @@ class SettingsDialog(QDialog):
         features_form = QFormLayout(features_group)
         self.auto_summarize_cb = QCheckBox("Generate summary after transcription")
         features_form.addRow(self.auto_summarize_cb)
+        self.summary_language_edit = QLineEdit()
+        self.summary_language_edit.setPlaceholderText("auto-detect (leave empty)")
+        self.summary_language_edit.setToolTip(
+            "Language code for the AI summary output (e.g. en, de, fr).\n"
+            "Leave empty to use the detected transcription language."
+        )
+        features_form.addRow("Summary language:", self.summary_language_edit)
         ai_layout.addWidget(features_group)
 
         ai_layout.addStretch()
@@ -455,6 +462,9 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self.ai_provider_combo.setCurrentIndex(idx)
         self.auto_summarize_cb.setChecked(self.config.get("ai", "auto_summarize"))
+        summary_lang = self.config.get("ai", "summary_language") or ""
+        if summary_lang:
+            self.summary_language_edit.setText(summary_lang)
         self._on_ai_provider_changed(self.ai_provider_combo.currentIndex())
 
     def _save_and_close(self):
@@ -511,6 +521,7 @@ class SettingsDialog(QDialog):
         self.config.set("ai", "model", active.get("model", ""))
         self.config.set("ai", "local_model_path", active.get("local_model_path", ""))
         self.config.set("ai", "auto_summarize", self.auto_summarize_cb.isChecked())
+        self.config.set("ai", "summary_language", self.summary_language_edit.text().strip())
         # Persist all provider settings so switching back restores them
         self.config.set("ai", "provider_settings", self._provider_settings)
 

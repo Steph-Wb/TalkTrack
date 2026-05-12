@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
         "local_model_path": "",
         "embed_model": "all-MiniLM-L6-v2",
         "auto_summarize": True,
+        "summary_language": "",
         "provider_settings": {},
     },
     "general": {
