@@ -1222,7 +1222,8 @@ class MainWindow(QMainWindow):
             actions_ready = pyqtSignal(list)
             error = pyqtSignal(str)
 
-            def __init__(self, provider, segments, speaker_names, notes="", instruction="", output_language=""):
+            def __init__(self, provider, segments, speaker_names, notes="", instruction="",
+                         output_language="", prompt_template=""):
                 super().__init__()
                 self._provider = provider
                 self._segments = segments
@@ -1230,12 +1231,13 @@ class MainWindow(QMainWindow):
                 self._notes = notes
                 self._instruction = instruction
                 self._output_language = output_language
+                self._prompt_template = prompt_template
 
             def run(self):
                 try:
                     summary_prompt = build_summary_prompt(
                         self._segments, self._names, self._notes, self._instruction,
-                        self._output_language,
+                        self._output_language, self._prompt_template,
                     )
                     summary = self._provider.complete(summary_prompt)
                     self.summary_ready.emit(summary)
@@ -1256,9 +1258,11 @@ class MainWindow(QMainWindow):
         summary_language = self.config.get("ai", "summary_language") or ""
         if not summary_language:
             summary_language = getattr(self._transcript, "language", "") or ""
+        prompt_template = self.config.get("ai", "summary_prompt_template") or ""
         self._summarize_worker = SummarizeWorker(
             provider, self._transcript.segments, speaker_names, notes, instruction,
             output_language=summary_language,
+            prompt_template=prompt_template,
         )
         self._summarize_worker.summary_ready.connect(self._on_summary_ready)
         self._summarize_worker.actions_ready.connect(self._on_actions_ready)

@@ -35,20 +35,37 @@ def _format_language(language):
     )
 
 
-def build_summary_prompt(segments, speaker_names, notes="", instruction="", output_language=""):
+DEFAULT_SUMMARY_PROMPT = (
+    "You are a professional meeting analyst. Based on the transcript below, "
+    "provide a structured summary with the following sections:\n\n"
+    "## Overview\n"
+    "One or two sentences summarising the meeting's purpose and outcome.\n\n"
+    "## Key Topics\n"
+    "Bullet list of the main themes or agenda items discussed.\n\n"
+    "## Summary\n"
+    "For each key topic, a concise paragraph covering what was discussed, "
+    "key points raised, and any relevant context.\n\n"
+    "## Decisions\n"
+    "Explicit decisions or agreements reached. "
+    'If none, write "No explicit decisions recorded."\n\n'
+    "## Open Items\n"
+    "Open questions, unresolved issues, or items needing follow-up that are "
+    "not concrete action items. If none, omit this section.\n\n"
+    "Write in a professional, neutral tone. Use markdown formatting."
+)
+
+
+def build_summary_prompt(segments, speaker_names, notes="", instruction="",
+                         output_language="", prompt_template=""):
     transcript_text = _format_transcript(segments, speaker_names)
     notes_text = _format_notes(notes)
     instruction_text = _format_instruction(instruction)
     language_text = _format_language(output_language)
+    body = prompt_template.strip() if prompt_template and prompt_template.strip() \
+        else DEFAULT_SUMMARY_PROMPT
     return (
         f"{language_text}"
-        "Below is a transcript of a meeting. Please provide a concise summary "
-        "covering: key discussion points, decisions made, and outcomes.\n\n"
-        "If user notes are included, incorporate any relevant context from them "
-        "into the summary.\n\n"
-        "If additional instructions are provided, follow them when generating "
-        "the summary.\n\n"
-        "Format as markdown with bullet points.\n\n"
+        f"{body}\n\n"
         f"TRANSCRIPT:\n{transcript_text}{notes_text}{instruction_text}"
     )
 

@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
         "embed_model": "all-MiniLM-L6-v2",
         "auto_summarize": True,
         "summary_language": "",
+        "summary_prompt_template": "",
         "provider_settings": {},
     },
     "general": {

@@ -352,6 +352,42 @@ class SettingsDialog(QDialog):
         features_form.addRow("Summary language:", self.summary_language_edit)
         ai_layout.addWidget(features_group)
 
+        # Summary Prompt group
+        prompt_group = QGroupBox("Summary Prompt")
+        prompt_layout = QVBoxLayout(prompt_group)
+
+        prompt_hint = QLabel(
+            "Instructions for the AI when generating meeting summaries. "
+            "The transcript and notes are always appended automatically. "
+            "Leave empty to use the built-in Fireflies-style default."
+        )
+        prompt_hint.setWordWrap(True)
+        prompt_hint.setStyleSheet("color: #a6adc8; font-size: 10px;")
+        prompt_layout.addWidget(prompt_hint)
+
+        self.summary_prompt_edit = QTextEdit()
+        self.summary_prompt_edit.setPlaceholderText(
+            "Leave empty to use the default structured prompt.\n\n"
+            "Example:\nYou are a legal analyst. Summarise this meeting under: "
+            "Key Agreements, Risks, Next Steps."
+        )
+        self.summary_prompt_edit.setMinimumHeight(120)
+        self.summary_prompt_edit.setMaximumHeight(220)
+        self.summary_prompt_edit.setStyleSheet(
+            "QTextEdit { background-color: #1e1e2e; color: #cdd6f4; "
+            "border: 1px solid #313244; border-radius: 4px; padding: 4px 8px; }"
+        )
+        prompt_layout.addWidget(self.summary_prompt_edit)
+
+        prompt_btn_row = QHBoxLayout()
+        prompt_btn_row.addStretch()
+        reset_prompt_btn = QPushButton("Reset to default")
+        reset_prompt_btn.clicked.connect(lambda: self.summary_prompt_edit.clear())
+        prompt_btn_row.addWidget(reset_prompt_btn)
+        prompt_layout.addLayout(prompt_btn_row)
+
+        ai_layout.addWidget(prompt_group)
+
         ai_layout.addStretch()
         tabs.addTab(ai_tab, "AI Assistant")
 
@@ -465,6 +501,9 @@ class SettingsDialog(QDialog):
         summary_lang = self.config.get("ai", "summary_language") or ""
         if summary_lang:
             self.summary_language_edit.setText(summary_lang)
+        tmpl = self.config.get("ai", "summary_prompt_template") or ""
+        if tmpl:
+            self.summary_prompt_edit.setPlainText(tmpl)
         self._on_ai_provider_changed(self.ai_provider_combo.currentIndex())
 
     def _save_and_close(self):
@@ -522,6 +561,8 @@ class SettingsDialog(QDialog):
         self.config.set("ai", "local_model_path", active.get("local_model_path", ""))
         self.config.set("ai", "auto_summarize", self.auto_summarize_cb.isChecked())
         self.config.set("ai", "summary_language", self.summary_language_edit.text().strip())
+        self.config.set("ai", "summary_prompt_template",
+                        self.summary_prompt_edit.toPlainText().strip())
         # Persist all provider settings so switching back restores them
         self.config.set("ai", "provider_settings", self._provider_settings)
 

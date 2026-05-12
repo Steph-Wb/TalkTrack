@@ -95,5 +95,45 @@ class TestSummaryLanguage(unittest.TestCase):
         self.assertTrue(prompt.startswith("IMPORTANT"), "language directive must be first")
 
 
+class TestSummaryPromptTemplate(unittest.TestCase):
+
+    def _seg(self):
+        from app.transcription.transcriber import TranscriptSegment
+        return [TranscriptSegment(0.0, 5.0, "Let's ship v2.", speaker="Alice")]
+
+    def test_custom_template_replaces_default(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(
+            self._seg(), {"Alice": "Alice"},
+            prompt_template="You are a legal analyst. Focus on risks.",
+        )
+        self.assertIn("legal analyst", prompt)
+        self.assertNotIn("Key Topics", prompt)
+
+    def test_empty_template_uses_default(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(self._seg(), {"Alice": "Alice"}, prompt_template="")
+        self.assertIn("Overview", prompt)
+
+    def test_whitespace_only_template_uses_default(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(self._seg(), {"Alice": "Alice"}, prompt_template="   ")
+        self.assertIn("Overview", prompt)
+
+    def test_transcript_always_appended(self):
+        from app.ai.summarizer import build_summary_prompt
+        prompt = build_summary_prompt(
+            self._seg(), {"Alice": "Alice"},
+            prompt_template="Custom instructions.",
+        )
+        self.assertIn("TRANSCRIPT:", prompt)
+        self.assertIn("ship v2", prompt)
+
+    def test_default_summary_prompt_exported(self):
+        from app.ai.summarizer import DEFAULT_SUMMARY_PROMPT
+        self.assertIn("Overview", DEFAULT_SUMMARY_PROMPT)
+        self.assertIn("Decisions", DEFAULT_SUMMARY_PROMPT)
+
+
 if __name__ == "__main__":
     unittest.main()
